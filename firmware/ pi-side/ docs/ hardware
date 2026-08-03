@@ -1,4 +1,4 @@
-firmware/
+firmware/ .getkeep # Firmware folder for XIAO ESP32C3 MicroPython code
 pi-side/
 docs/
 hardware/

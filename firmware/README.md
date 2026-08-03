@@ -4,33 +4,36 @@
 
 | File | Description |
 |------|-------------|
-| `MAX30102_Full_Monitor.ino` | Full version with Heart Rate, SpO2, Temperature + OLED |
-| `MAX30102_HeartRate_Temp_OLED.ino` | Simpler version (HR + Temp + OLED only) |
+| `Armband_Full.ino` | **Main development firmware** – HR, SpO2, LIS3DH, 940nm, MQTT, OLED |
+| `MAX30102_Full_Monitor.ino` | Clean standalone MAX30102 (HR + SpO2 + Temp + OLED) |
+| `MAX30102_HeartRate_Temp_OLED.ino` | Minimal version (HR + Temp + OLED only) |
 
 ## Required Libraries
 
-Install these via Arduino Library Manager:
+- SparkFun MAX3010x Pulse and Proximity Sensor
+- Adafruit SSD1306
+- Adafruit GFX
+- Adafruit LIS3DH
+- PubSubClient
 
-- **SparkFun MAX3010x** (includes `MAX30105.h`, `heartRate.h`, `spo2_algorithm.h`)
-- **Adafruit SSD1306**
-- **Adafruit GFX**
+## Hardware Notes (XIAO ESP32C3)
 
-## Hardware
+| Function          | Pin     |
+|-------------------|---------| 
+| I2C SDA           | D4      |
+| I2C SCL           | D5      |
+| 940nm Emitter     | D6      |
+| 940nm ADC (BPW34) | A0      |
 
-- Seeed XIAO ESP32C3 (or any ESP32 / Arduino with I2C)
-- MAX30102 sensor
-- SSD1306 128x64 OLED (I2C address 0x3C)
+## MQTT Payload Example
 
-## Wiring
-
-| MAX30102 / OLED | XIAO ESP32C3 |
-|-----------------|--------------|
-| VIN / VCC       | 3.3V         |
-| GND             | GND          |
-| SDA             | D4 (SDA)     |
-| SCL             | D5 (SCL)     |
-
-## Serial Commands
-
-- `r` → Reset BPM average
-- `t` → Force temperature reading
+```json
+{
+  "bpm": 72,
+  "spo2": 97,
+  "temp": 36.4,
+  "motion": 9.85,
+  "raw940": 1842,
+  "moving": false
+}
+```

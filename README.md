@@ -1,6 +1,6 @@
 # Armband PPG + 940nm Experimental Device
 
-Arm-worn device for exercise use, built around the Seeed XIAO ESP32C3.
+Arm-worn device for exercise use, built around the **Seeed XIAO ESP32C3**.
 
 ## Goals
 
@@ -28,19 +28,42 @@ Arm-worn device for exercise use, built around the Seeed XIAO ESP32C3.
 | Mount                  | HYS Adjustable Elastic Armband               |
 | Solder                 | MAIYUM 63/37 0.8 mm rosin-core               |
 
-## Planned Features
+## Current Firmware Status
 
-### Reliable
-- Heart Rate
-- SpO₂
-- Motion / activity detection
-- Motion artifact rejection
-- Battery-powered arm-worn operation
-- Wireless data streaming (MQTT)
+| Feature                        | Status      | File |
+|--------------------------------|-------------|------|
+| Heart Rate                     | Working     | `MAX30102_Full_Monitor.ino` |
+| SpO₂                           | Working     | `MAX30102_Full_Monitor.ino` |
+| Temperature                    | Working     | `MAX30102_Full_Monitor.ino` |
+| OLED Display                   | Working     | `MAX30102_Full_Monitor.ino` |
+| LIS3DH Accelerometer           | Skeleton    | `Armband_Full.ino` |
+| 940 nm Reflectance Channel     | Skeleton    | `Armband_Full.ino` |
+| MQTT Streaming                 | Skeleton    | `Armband_Full.ino` |
+| Motion Artifact Rejection      | Planned     | - |
+| Battery Monitoring             | Planned     | - |
 
-### Experimental
-- 940 nm optical reflectance measurement
-- Personal calibration against FreeStyle Libre readings
-- Feature extraction + simple personal ML model (on Pi)
+## Repository Structure
 
-## Planned Repository Structure
+```
+armband-ppg-940nm/
+├── README.md
+├── firmware/
+│   ├── README.md
+│   ├── MAX30102_Full_Monitor.ino      # Clean HR + SpO2 + Temp + OLED
+│   ├── MAX30102_HeartRate_Temp_OLED.ino
+│   └── Armband_Full.ino               # Main development firmware (all sensors)
+└── firmware/pi-side/                 # Raspberry Pi side code (future)
+```
+
+## Quick Start
+
+1. Install libraries (Arduino Library Manager):
+   - SparkFun MAX3010x Pulse and Proximity Sensor
+   - Adafruit SSD1306
+   - Adafruit GFX
+   - Adafruit LIS3DH
+   - PubSubClient (for MQTT)
+
+2. Open `firmware/Armband_Full.ino`
+3. Update WiFi + MQTT credentials
+4. Upload to XIAO ESP32C3

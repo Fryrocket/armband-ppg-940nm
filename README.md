@@ -80,24 +80,49 @@ Battery life is critical on the 500 mAh LiPo. Implemented approach in `Armband_F
 ```
 armband-ppg-940nm/
 ├── README.md
+├── NOTES.md
+├── platformio.ini                 # Easy library install via PlatformIO
 ├── firmware/
 │   ├── README.md
-│   ├── MAX30102_Full_Monitor.ino      # Clean HR + SpO2 + Temp + OLED
+│   ├── MAX30102_Full_Monitor.ino
 │   ├── MAX30102_HeartRate_Temp_OLED.ino
-│   └── Armband_Full.ino               # Main development firmware (all sensors + deep sleep)
-└── firmware/pi-side/                 # Raspberry Pi side code (future)
+│   └── Armband_Full.ino           # Main firmware (all sensors + deep sleep)
+└── firmware/pi-side/
 ```
 
-## Quick Start
+## Quick Start – Libraries
 
-1. Install libraries (Arduino Library Manager):
-   - SparkFun MAX3010x Pulse and Proximity Sensor
-   - Adafruit SSD1306
-   - Adafruit GFX
-   - Adafruit LIS3DH
-   - PubSubClient (for MQTT)
+### Option A: Arduino IDE (Library Manager)
 
-2. Open `firmware/Armband_Full.ino`
-3. Edit the **USER CONFIG** section (WiFi, MQTT user/pass, pins, motion threshold, battery scale, sleep timing)
-4. Upload to XIAO ESP32C3
-5. Open Serial Monitor at 115200 to watch wake / publish / sleep cycles
+Search and install these exact names:
+
+| Library | Search term in Library Manager |
+|---------|--------------------------------|
+| SparkFun MAX3010x | `SparkFun MAX3010x Pulse and Proximity Sensor` |
+| Adafruit SSD1306 | `Adafruit SSD1306` |
+| Adafruit GFX | `Adafruit GFX Library` |
+| Adafruit LIS3DH | `Adafruit LIS3DH` |
+| PubSubClient | `PubSubClient` by Nick O'Leary |
+
+### Option B: PlatformIO (recommended)
+
+A `platformio.ini` is already in the repo root with the correct libraries declared.
+
+```bash
+pio run -t upload
+pio device monitor
+```
+
+PlatformIO will automatically download:
+- sparkfun/SparkFun MAX3010x Pulse and Proximity Sensor
+- adafruit/Adafruit SSD1306
+- adafruit/Adafruit GFX Library
+- adafruit/Adafruit LIS3DH
+- knolleary/PubSubClient
+
+## Quick Start – Firmware
+
+1. Open `firmware/Armband_Full.ino` (or open the folder in PlatformIO)
+2. Edit the **USER CONFIG** section (WiFi, MQTT user/pass, pins, motion threshold, battery scale, sleep timing)
+3. Upload to XIAO ESP32C3
+4. Open Serial Monitor at 115200 to watch wake → publish → sleep cycles

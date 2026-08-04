@@ -2,14 +2,16 @@
  * Armband PPG + 940nm Full Firmware
  * Target: Seeed XIAO ESP32C3
  *
- * Features implemented:
+ * Features:
  *  - MAX30102 Heart Rate + SpO2 + Temp
  *  - LIS3DH motion detection with tunable threshold + filtering
  *  - 940nm reflectance channel with multi-sample averaging + EMA filter
  *  - Battery voltage monitoring (ADC + divider)
  *  - Full WiFi + MQTT (user/pass support)
  *  - Deep sleep with timer + GPIO wake
- *  - OLED status (optional, powers down before sleep)
+ *  - RTC-persistent motion EMA + isMoving state (survives deep sleep)
+ *  - Wake-skip counter for quiet periods (saves WiFi power)
+ *  - Connection-time measurement + motion state-transition logging
  *
  * Edit the USER CONFIG section for your network, pins, and thresholds.
  */
@@ -25,6 +27,7 @@
 #include <Adafruit_LIS3DH.h>
 #include <Adafruit_Sensor.h>
 #include "esp_sleep.h"
+#include "esp_system.h"
 
 // =============================================================================
 // USER CONFIG – edit these
@@ -46,7 +49,7 @@ const char* MQTT_TOPIC    = "armband/ppg";
 #define PIN_940NM_EMITTER  D6          // TSAL6200 drive pin
 #define PIN_940NM_ADC      A0          // BPW34 via resistor to ADC
 #define PIN_BATTERY_ADC    A1          // Voltage divider from LiPo (hypothetical)
-#define PIN_LIS3DH_INT     D2          // LIS3DH INT1 for wake (optional, wire if available)
+#define PIN_LIS3DH_INT     D2          // LIS3DH INT1 for wake (optional)
 
 // --- Motion threshold (tune these) ---
 const float MOTION_THRESHOLD     = 11.5;   // magnitude above ~g to count as moving
@@ -58,16 +61,19 @@ const int   RAW940_SAMPLES       = 8;     // multi-sample average
 const float RAW940_EMA_ALPHA     = 0.2;   // exponential filter
 
 // --- Battery ---
-// Hypothetical divider: e.g. 100k / 100k → scale ~2.0 for 0–6.6 V range
-// Measure real values with a meter and adjust
 const float BATTERY_SCALE        = 2.0;
 const float BATTERY_OFFSET       = 0.0;
 const int   BATTERY_SAMPLES      = 12;
 
-// --- Deep sleep timing (ms / us) ---
+// --- Deep sleep / power ---
 const uint64_t PERIODIC_WAKE_US  = 180ULL * 1000000ULL;  // 3 minutes timer wake
-const unsigned long AWAKE_WINDOW_MS = 12000;             // stay awake this long after motion
-const unsigned long SETTLE_MS    = 120;
+const unsigned long AWAKE_WINDOW_MS = 12000;             // stay awake after motion
+const unsigned long QUIET_AWAKE_MS  = 5500;              // shorter awake when quiet
+const unsigned long SETTLE_MS       = 120;
+
+// How many quiet (no-motion) wakes to skip before forcing a network connect
+// 0 = connect every wake. 2 = connect on every 3rd quiet wake, etc.
+const uint8_t QUIET_WAKE_SKIP = 2;
 
 // =============================================================================
 // END USER CONFIG
@@ -100,11 +106,20 @@ int8_t validHeartRate;
 float temperature = 0;
 bool fingerDetected = false;
 
-// Motion
+// ---------- RTC-persistent state (survives deep sleep) ----------
+RTC_DATA_ATTR float    rtcFilteredMotion = 0;
+RTC_DATA_ATTR bool     rtcIsMoving       = false;
+RTC_DATA_ATTR uint32_t rtcBootCount      = 0;
+RTC_DATA_ATTR uint8_t  rtcQuietSkipCount = 0;   // how many quiet wakes we have skipped
+
+// Working copies (loaded from RTC at boot)
 float accelX = 0, accelY = 0, accelZ = 0;
 float motionMagnitude = 0;
 float filteredMotion = 0;
-bool isMoving = false;
+bool  isMoving = false;
+bool  prevIsMoving = false;          // for transition detection
+bool  motionTransition = false;      // true if state changed this wake
+const char* transitionStr = "none";  // "still_to_moving" / "moving_to_still" / "none"
 
 // 940nm
 int raw940 = 0;
@@ -113,12 +128,14 @@ float filtered940 = 0;
 // Battery
 float batteryVoltage = 0;
 
-// Timing
+// Timing & power
 unsigned long lastTempRead = 0;
 unsigned long lastMqttPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long wakeStart = 0;
 bool motionEventThisWake = false;
+bool doNetworkThisWake = true;       // decided in setup()
+unsigned long connectTimeMs = 0;     // WiFi + MQTT connect duration
 
 // ---------------------------------------------------------------------------
 // Battery voltage (ADC + multi-sample)
@@ -130,7 +147,6 @@ float readBatteryVoltage() {
     delayMicroseconds(40);
   }
   float raw = sum / (float)BATTERY_SAMPLES;
-  // ESP32-C3 ADC is ~0–3.3 V at 12-bit (0–4095)
   float volts = (raw / 4095.0f) * 3.3f * BATTERY_SCALE + BATTERY_OFFSET;
   return volts;
 }
@@ -160,7 +176,8 @@ float read940Filtered() {
 }
 
 // ---------------------------------------------------------------------------
-// Motion with EMA + hysteresis threshold
+// Motion with EMA + hysteresis + transition logging
+// Uses RTC-persisted filteredMotion / isMoving
 // ---------------------------------------------------------------------------
 void updateMotion() {
   sensors_event_t event;
@@ -170,13 +187,16 @@ void updateMotion() {
   accelZ = event.acceleration.z;
 
   float mag = sqrtf(accelX*accelX + accelY*accelY + accelZ*accelZ);
+  motionMagnitude = mag;
 
-  if (filteredMotion < 0.1f) {
-    filteredMotion = mag;
+  // Continue EMA from the value that survived deep sleep
+  if (filteredMotion < 0.05f) {
+    filteredMotion = mag;          // first-ever sample
   } else {
     filteredMotion = MOTION_EMA_ALPHA * mag + (1.0f - MOTION_EMA_ALPHA) * filteredMotion;
   }
-  motionMagnitude = mag;
+
+  prevIsMoving = isMoving;
 
   // Hysteresis
   if (isMoving) {
@@ -189,10 +209,28 @@ void updateMotion() {
       motionEventThisWake = true;
     }
   }
+
+  // Detect and log transitions
+  motionTransition = (isMoving != prevIsMoving);
+  if (motionTransition) {
+    if (isMoving) {
+      transitionStr = "still_to_moving";
+      Serial.println("[MOTION] still → MOVING");
+    } else {
+      transitionStr = "moving_to_still";
+      Serial.println("[MOTION] MOVING → still");
+    }
+  } else {
+    transitionStr = "none";
+  }
+
+  // Keep RTC copies up to date so they survive the next sleep
+  rtcFilteredMotion = filteredMotion;
+  rtcIsMoving       = isMoving;
 }
 
 // ---------------------------------------------------------------------------
-// WiFi + MQTT
+// WiFi + MQTT with timing
 // ---------------------------------------------------------------------------
 void setupWiFi() {
   Serial.print("WiFi");
@@ -233,10 +271,11 @@ void reconnectMQTT() {
 void publishData() {
   if (!mqtt.connected()) return;
 
-  char payload[220];
+  char payload[280];
   snprintf(payload, sizeof(payload),
     "{\"bpm\":%d,\"spo2\":%d,\"temp\":%.1f,\"motion\":%.2f,\"moving\":%s,"
-    "\"raw940\":%d,\"filt940\":%.1f,\"batt\":%.2f}",
+    "\"raw940\":%d,\"filt940\":%.1f,\"batt\":%.2f,"
+    "\"trans\":\"%s\",\"conn_ms\":%lu,\"boot\":%u}",
     beatAvg,
     validSPO2 ? spo2 : -1,
     temperature,
@@ -244,7 +283,10 @@ void publishData() {
     isMoving ? "true" : "false",
     raw940,
     filtered940,
-    batteryVoltage
+    batteryVoltage,
+    transitionStr,
+    connectTimeMs,
+    (unsigned)rtcBootCount
   );
 
   mqtt.publish(MQTT_TOPIC, payload);
@@ -296,31 +338,29 @@ void updateDisplay() {
 // Power-down helpers before deep sleep
 // ---------------------------------------------------------------------------
 void prepareForSleep() {
-  // Turn off 940 nm emitter
   digitalWrite(PIN_940NM_EMITTER, LOW);
 
-  // Shut down MAX30102 LEDs / sensor as much as possible
   particleSensor.setPulseAmplitudeRed(0);
   particleSensor.setPulseAmplitudeIR(0);
   particleSensor.setPulseAmplitudeGreen(0);
-  // Optional: particleSensor.shutDown(); if available in your library version
 
-  // OLED off
   display.ssd1306_command(SSD1306_DISPLAYOFF);
 
-  // MQTT + WiFi down
   if (mqtt.connected()) {
     mqtt.disconnect();
   }
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
-  delay(50);
+  delay(40);
 }
 
 void goToDeepSleep() {
+  // Make sure latest motion state is stored in RTC
+  rtcFilteredMotion = filteredMotion;
+  rtcIsMoving       = isMoving;
+
   prepareForSleep();
 
-  // Timer wake
   esp_sleep_enable_timer_wakeup(PERIODIC_WAKE_US);
 
   // Optional GPIO wake from LIS3DH INT pin (active high)
@@ -328,9 +368,10 @@ void goToDeepSleep() {
   // gpio_wakeup_enable((gpio_num_t)PIN_LIS3DH_INT, GPIO_INTR_HIGH_LEVEL);
   // esp_sleep_enable_gpio_wakeup();
 
-  Serial.println("Deep sleep...");
+  Serial.printf("Deep sleep... (boot #%u, quietSkip=%u)\n",
+                (unsigned)rtcBootCount, (unsigned)rtcQuietSkipCount);
   Serial.flush();
-  delay(30);
+  delay(20);
   esp_deep_sleep_start();
 }
 
@@ -340,10 +381,21 @@ void goToDeepSleep() {
 void setup() {
   Serial.begin(115200);
   delay(SETTLE_MS);
-  Serial.println("\n=== Armband Full Firmware (Deep Sleep) ===");
+
+  rtcBootCount++;
+  Serial.printf("\n=== Armband wake  boot #%u  reset=%d ===\n",
+                (unsigned)rtcBootCount, (int)esp_reset_reason());
 
   wakeStart = millis();
   motionEventThisWake = false;
+  motionTransition = false;
+  transitionStr = "none";
+  connectTimeMs = 0;
+
+  // Restore motion state that survived deep sleep
+  filteredMotion = rtcFilteredMotion;
+  isMoving       = rtcIsMoving;
+  prevIsMoving   = isMoving;
 
   // 940 nm emitter
   pinMode(PIN_940NM_EMITTER, OUTPUT);
@@ -363,8 +415,7 @@ void setup() {
 
   // MAX30102
   if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
-    Serial.println("MAX30102 not found!");
-    // Continue anyway for battery/motion testing
+    Serial.println("MAX30102 not found");
   } else {
     particleSensor.setup(60, 4, 2, 100, 411, 4096);
     particleSensor.setPulseAmplitudeRed(0x1F);
@@ -380,28 +431,50 @@ void setup() {
     }
   } else {
     lis.setRange(LIS3DH_RANGE_4_G);
-    // Optional: configure interrupt on INT1 for motion wake later
     Serial.println("LIS3DH OK");
   }
 
-  // First sensor reads
+  // First sensor reads (motion uses restored RTC state)
   batteryVoltage = readBatteryVoltage();
   updateMotion();
   read940Filtered();
 
-  // Network only if we have something useful to send
-  setupWiFi();
-  mqtt.setServer(MQTT_SERVER, MQTT_PORT);
-  reconnectMQTT();
+  // Decide whether this wake should use the network
+  // Always connect on motion events or when skip counter expires
+  if (motionEventThisWake || isMoving) {
+    doNetworkThisWake = true;
+    rtcQuietSkipCount = 0;          // reset skip counter on activity
+  } else {
+    if (rtcQuietSkipCount >= QUIET_WAKE_SKIP) {
+      doNetworkThisWake = true;
+      rtcQuietSkipCount = 0;
+    } else {
+      doNetworkThisWake = false;
+      rtcQuietSkipCount++;
+      Serial.printf("Quiet wake – skipping network (%u/%u)\n",
+                    (unsigned)rtcQuietSkipCount, (unsigned)QUIET_WAKE_SKIP);
+    }
+  }
 
-  // Immediate status publish on every wake
-  publishData();
+  if (doNetworkThisWake) {
+    unsigned long t0 = millis();
+    setupWiFi();
+    mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+    reconnectMQTT();
+    connectTimeMs = millis() - t0;
+    Serial.printf("Connect time: %lu ms\n", connectTimeMs);
+
+    publishData();
+  } else {
+    Serial.println("No network this wake");
+  }
 }
 
 void loop() {
-  // Keep MQTT alive while awake
-  if (!mqtt.connected()) reconnectMQTT();
-  mqtt.loop();
+  if (doNetworkThisWake) {
+    if (!mqtt.connected()) reconnectMQTT();
+    mqtt.loop();
+  }
 
   // ---------- PPG buffer collection ----------
   for (int i = 0; i < BUFFER_SIZE; i++) {
@@ -450,18 +523,15 @@ void loop() {
     lastDisplayUpdate = millis();
   }
 
-  // ---------- MQTT ----------
-  if (millis() - lastMqttPublish > 1500) {
+  // ---------- MQTT (only if we decided to network this wake) ----------
+  if (doNetworkThisWake && (millis() - lastMqttPublish > 1500)) {
     publishData();
     lastMqttPublish = millis();
   }
 
   // ---------- Decision to sleep ----------
   unsigned long awake = millis() - wakeStart;
-
-  // If we had a motion event, stay awake for the full window so data streams
-  // Otherwise (timer wake / quiet) sleep sooner to save battery
-  unsigned long targetAwake = motionEventThisWake ? AWAKE_WINDOW_MS : 6000;
+  unsigned long targetAwake = motionEventThisWake ? AWAKE_WINDOW_MS : QUIET_AWAKE_MS;
 
   if (awake > targetAwake) {
     goToDeepSleep();

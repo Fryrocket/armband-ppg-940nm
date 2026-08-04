@@ -45,19 +45,125 @@ README Quick Start updated with:
 - Precise Arduino IDE Library Manager search terms
 - PlatformIO one-command install/upload instructions
 
-### README
-Status table and Deep Sleep Strategy section updated to match the new code.
+---
 
-### Next actions (priority order)
-1. Fill real WiFi / MQTT credentials and battery scale/offset
-2. Upload and verify wake → publish → sleep cycle on Serial
-3. Measure deep-sleep current with a real meter
-4. Tune motion threshold and 940 nm filter while wearing
-5. Decide whether ADC battery reading is sufficient or switch to INA219
-6. Improve motion-artifact rejection for PPG (currently only magnitude gate)
-7. Start Pi-side logging of the MQTT stream
+## Detailed Next Steps
+
+### 1. Fill real configuration values
+
+Open `firmware/Armband_Full.ino` and edit the **USER CONFIG** section at the top:
+
+```cpp
+// WiFi
+const char* WIFI_SSID     = "your_real_ssid";
+const char* WIFI_PASSWORD = "your_real_password";
+
+// MQTT
+const char* MQTT_SERVER   = "192.168.x.x";     // Raspberry Pi IP
+const char* MQTT_USER     = "armband";         // or "" if no auth
+const char* MQTT_PASSWORD = "your_mqtt_pass";  // or "" if no auth
+
+// Battery – measure with a multimeter
+// Example: if ADC reads 1.65 V when battery is 3.30 V → scale = 2.0
+const float BATTERY_SCALE  = 2.0;
+const float BATTERY_OFFSET = 0.0;
+```
+
+Also confirm these pins match your wiring:
+
+- `PIN_940NM_EMITTER` (currently D6)
+- `PIN_940NM_ADC` (currently A0)
+- `PIN_BATTERY_ADC` (currently A1)
+
+### 2. First upload & basic verification
+
+**Arduino IDE**
+1. Select board: `Seeed XIAO ESP32C3`
+2. Open `firmware/Armband_Full.ino`
+3. Upload
+4. Open Serial Monitor at **115200**
+
+**PlatformIO**
+```bash
+pio run -t upload
+pio device monitor
+```
+
+What you should see:
+- Boot message
+- WiFi connection result
+- MQTT connection result
+- JSON payload printed
+- “Deep sleep...” message
+- Device goes quiet
+
+After ~3 minutes it should wake again and repeat.
+
+### 3. Verify deep-sleep current
+
+1. Power the board from a bench supply or battery with a multimeter in series (µA range).
+2. Let it enter deep sleep.
+3. Target: low tens of µA once peripherals are quiet.
+4. If current is high (hundreds of µA or mA):
+   - Confirm MAX30102 LEDs are off
+   - Confirm OLED is commanded off
+   - Confirm `WiFi.mode(WIFI_OFF)` is executing
+   - Check for floating pins or continuously powered external parts
+
+### 4. Tune motion detection while wearing
+
+Wear the armband and move normally (walking, arm swings, still periods).
+
+Watch Serial or MQTT for `motion` and `moving` values.
+
+Adjust these in USER CONFIG:
+
+| Constant              | Effect                                      | Typical starting range |
+|-----------------------|---------------------------------------------|------------------------|
+| `MOTION_THRESHOLD`    | Magnitude above which motion is declared    | 10.5 – 13.0            |
+| `MOTION_HYSTERESIS`   | Prevents rapid on/off chatter               | 0.5 – 1.2              |
+| `MOTION_EMA_ALPHA`    | How fast the filter tracks changes (higher = faster) | 0.15 – 0.35     |
+
+Goal: still periods report `moving: false`, normal activity reports `moving: true` without excessive flickering.
+
+### 5. Tune 940 nm filtering
+
+Watch `raw940` vs `filt940` in the JSON.
+
+| Constant              | Effect                                      | Notes |
+|-----------------------|---------------------------------------------|-------|
+| `RAW940_SAMPLES`      | Number of ADC samples averaged              | 4–16  |
+| `RAW940_EMA_ALPHA`    | Smoothing of the filtered value             | 0.1–0.3 |
+
+Higher sample counts + lower alpha = smoother but slower response.
+
+### 6. Battery reading accuracy check
+
+1. Measure real battery voltage with a multimeter.
+2. Compare to the `batt` value published over MQTT.
+3. Adjust `BATTERY_SCALE` and `BATTERY_OFFSET` until they match across the useful range (≈3.3 V – 4.2 V).
+
+If the ADC is too noisy or inaccurate for your needs, plan to add an INA219 later.
+
+### 7. Optional – enable pure motion wake
+
+1. Wire LIS3DH INT1 to pin D2 (or change `PIN_LIS3DH_INT`).
+2. In `goToDeepSleep()`, uncomment the two GPIO wake lines.
+3. Configure the LIS3DH interrupt registers if needed (still basic in current code).
+4. Test that motion wakes the device even before the timer expires.
+
+### 8. Later improvements (after basics are solid)
+
+- Better motion-artifact rejection for PPG (currently only a magnitude gate)
+- Adaptive sleep interval (shorter when battery is low or activity is high)
+- INA219 for accurate voltage + current
+- Raspberry Pi side: MQTT subscriber + logging + simple plots of 940 nm vs FreeStyle Libre
+- Decide whether to keep the OLED long-term or remove it for better battery life
+
+---
 
 ### Open design questions
+
 - Wire LIS3DH INT1 for pure motion wake?
 - Keep OLED powered only during the awake window, or remove it for longer battery life?
 - Adaptive sleep interval based on battery voltage / activity level?

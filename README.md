@@ -43,6 +43,7 @@ Arm-worn device for exercise use, built around the **Seeed XIAO ESP32C3**.
 | MQTT Streaming (user/pass)     | Implemented     | `Armband_Full.ino` |
 | Battery Voltage Monitoring     | Implemented     | `Armband_Full.ino` |
 | Deep Sleep (timer + GPIO)      | Implemented     | `Armband_Full.ino` |
+| RTC motion state + wake-skip   | Implemented     | `Armband_Full.ino` |
 | Motion Artifact Rejection      | Basic (threshold) | `Armband_Full.ino` |
 
 ## Deep Sleep Strategy
@@ -59,70 +60,50 @@ Battery life is critical on the 500 mAh LiPo. Implemented approach in `Armband_F
 3. Read battery voltage (multi-sample ADC).
 4. Read 940 nm (multi-sample + EMA filter).
 5. Run PPG acquisition window if finger present.
-6. Publish full JSON packet over MQTT.
-7. If motion was detected this wake → stay awake longer (`AWAKE_WINDOW_MS`) so data can stream.
+6. Publish full JSON packet over MQTT (or skip network on quiet wakes).
+7. If motion was detected this wake → stay awake longer so data can stream.
 8. Power down sensors, OLED, WiFi/MQTT → deep sleep.
 
 ### Power Notes for XIAO ESP32C3
 - MAX30102 LEDs are forced off before sleep.
 - OLED is commanded off.
 - WiFi is fully powered down (`WIFI_OFF`).
+- Motion EMA state survives deep sleep via RTC memory.
+- Quiet wakes can skip WiFi/MQTT (`QUIET_WAKE_SKIP`).
 - Expect low tens of µA in deep sleep once peripherals are quiet; measure with a real meter.
-- All thresholds, sample counts, and timing constants are in the **USER CONFIG** block at the top of the .ino – tweak freely.
 
-### Battery Monitoring
-- Uses ADC + simple voltage divider (scale/offset adjustable).
-- Published on every wake (motion or timer).
-- Future: swap in INA219 for higher accuracy + current if needed.
+## Documentation
+
+| File | Purpose |
+|------|---------|
+| [SETUP.md](SETUP.md) | **Detailed setup instructions** – hardware, libraries, config, first run, troubleshooting |
+| [NOTES.md](NOTES.md) | Development log, tuning guides, open questions |
+| `firmware/Armband_Full.ino` | Main firmware |
 
 ## Repository Structure
 
 ```
 armband-ppg-940nm/
 ├── README.md
-├── NOTES.md
-├── platformio.ini                 # Easy library install via PlatformIO
+├── SETUP.md                       # Detailed setup guide
+├── NOTES.md                       # Development notes & tuning
+├── platformio.ini
 ├── firmware/
 │   ├── README.md
 │   ├── MAX30102_Full_Monitor.ino
 │   ├── MAX30102_HeartRate_Temp_OLED.ino
-│   └── Armband_Full.ino           # Main firmware (all sensors + deep sleep)
+│   └── Armband_Full.ino           # Main firmware
 └── firmware/pi-side/
 ```
 
-## Quick Start – Libraries
+## Quick Start
 
-### Option A: Arduino IDE (Library Manager)
+For a full walkthrough see **[SETUP.md](SETUP.md)**.
 
-Search and install these exact names:
+Short version:
 
-| Library | Search term in Library Manager |
-|---------|--------------------------------|
-| SparkFun MAX3010x | `SparkFun MAX3010x Pulse and Proximity Sensor` |
-| Adafruit SSD1306 | `Adafruit SSD1306` |
-| Adafruit GFX | `Adafruit GFX Library` |
-| Adafruit LIS3DH | `Adafruit LIS3DH` |
-| PubSubClient | `PubSubClient` by Nick O'Leary |
-
-### Option B: PlatformIO (recommended)
-
-A `platformio.ini` is already in the repo root with the correct libraries declared.
-
-```bash
-pio run -t upload
-pio device monitor
-```
-
-PlatformIO will automatically download:
-- sparkfun/SparkFun MAX3010x Pulse and Proximity Sensor
-- adafruit/Adafruit SSD1306
-- adafruit/Adafruit GFX Library
-- adafruit/Adafruit LIS3DH
-- knolleary/PubSubClient
-
-## Quick Start – Firmware
-
-1. Open `firmware/Armband_Full.ino` (or open the folder in PlatformIO)
-2. Edit the **USER CONFIG** section (WiFi, MQTT user/pass, pins, motion threshold, battery scale, sleep timing)
-3. Upload to XIAO ESP32C3
-4. Open Serial Monitor at 115200 to watch wake → publish → sleep cycles
+1. Install the libraries (Arduino IDE Library Manager or PlatformIO)
+2. Open `firmware/Armband_Full.ino`
+3. Edit the **USER CONFIG** section (WiFi, MQTT, battery scale)
+4. Upload to XIAO ESP32C3
+5. Open Serial Monitor at 115200 and confirm wake → publish → sleep cycles

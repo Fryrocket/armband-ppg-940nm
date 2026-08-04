@@ -30,49 +30,50 @@ Arm-worn device for exercise use, built around the **Seeed XIAO ESP32C3**.
 
 ## Current Firmware Status
 
-| Feature                        | Status      | File |
-|--------------------------------|-------------|------|
-| Heart Rate                     | Working     | `MAX30102_Full_Monitor.ino` |
-| SpO₂                           | Working     | `MAX30102_Full_Monitor.ino` |
-| Temperature                    | Working     | `MAX30102_Full_Monitor.ino` |
-| OLED Display                   | Working     | `MAX30102_Full_Monitor.ino` |
-| LIS3DH Accelerometer           | Skeleton    | `Armband_Full.ino` |
-| 940 nm Reflectance Channel     | Skeleton    | `Armband_Full.ino` |
-| MQTT Streaming                 | Skeleton    | `Armband_Full.ino` |
-| Motion Artifact Rejection      | Planned     | - |
-| Battery Monitoring             | Planned     | - |
-| Deep Sleep                     | Notes added | See below |
+| Feature                        | Status          | File |
+|--------------------------------|-----------------|------|
+| Heart Rate                     | Working         | `MAX30102_Full_Monitor.ino` / `Armband_Full.ino` |
+| SpO₂                           | Working         | `MAX30102_Full_Monitor.ino` / `Armband_Full.ino` |
+| Temperature                    | Working         | `MAX30102_Full_Monitor.ino` / `Armband_Full.ino` |
+| OLED Display                   | Working         | `MAX30102_Full_Monitor.ino` / `Armband_Full.ino` |
+| LIS3DH Accelerometer           | Implemented     | `Armband_Full.ino` |
+| Motion Threshold + Filtering   | Implemented     | `Armband_Full.ino` |
+| 940 nm Reflectance Channel     | Implemented     | `Armband_Full.ino` |
+| 940 nm Multi-sample + EMA      | Implemented     | `Armband_Full.ino` |
+| MQTT Streaming (user/pass)     | Implemented     | `Armband_Full.ino` |
+| Battery Voltage Monitoring     | Implemented     | `Armband_Full.ino` |
+| Deep Sleep (timer + GPIO)      | Implemented     | `Armband_Full.ino` |
+| Motion Artifact Rejection      | Basic (threshold) | `Armband_Full.ino` |
 
-## Deep Sleep Strategy (Notes)
+## Deep Sleep Strategy
 
-Battery life is critical on the 500 mAh LiPo. Target approach for `Armband_Full.ino`:
+Battery life is critical on the 500 mAh LiPo. Implemented approach in `Armband_Full.ino`:
 
 ### Wake Sources
-- **Ext0 / GPIO wake** on LIS3DH interrupt pin (or a dedicated motion threshold pin) for activity-triggered sampling.
-- **Timer wake** for periodic background reports (e.g. every 2–5 minutes) so MQTT still gets voltage + status even when still.
-- Combine both: motion events wake immediately; timer provides the heartbeat.
+- **Timer wake** every 3 minutes (configurable via `PERIODIC_WAKE_US`) for periodic voltage + status reports.
+- **GPIO wake** ready (commented) for LIS3DH INT1 – wire the interrupt pin and uncomment the two lines in `goToDeepSleep()` when ready.
 
-### Recommended Flow
-1. On wake → quick settle delay (50–150 ms).
-2. Read LIS3DH (check motion magnitude / activity level).
-3. If motion above threshold → full PPG + 940 nm acquisition window, then publish.
-4. Always read battery voltage (ADC or future INA219) and publish a short status packet.
-5. Disconnect WiFi/MQTT cleanly.
-6. Re-arm wake sources and call `esp_deep_sleep_start()`.
+### Flow
+1. On wake → short settle delay.
+2. Read LIS3DH (filtered magnitude + hysteresis threshold).
+3. Read battery voltage (multi-sample ADC).
+4. Read 940 nm (multi-sample + EMA filter).
+5. Run PPG acquisition window if finger present.
+6. Publish full JSON packet over MQTT.
+7. If motion was detected this wake → stay awake longer (`AWAKE_WINDOW_MS`) so data can stream.
+8. Power down sensors, OLED, WiFi/MQTT → deep sleep.
 
 ### Power Notes for XIAO ESP32C3
-- Use RTC-capable GPIO for the wake pin.
-- Turn off the MAX30102 LED and put sensors into low-power / sleep modes before deep sleep.
-- WiFi should be fully powered down (`WiFi.mode(WIFI_OFF)` or equivalent) before sleeping.
-- Expect ~10–30 µA range in deep sleep if peripherals are properly shut down; validate with a real meter.
-- Consider a short “post-motion awake” window (a few seconds) so multiple MQTT messages can finish before sleeping again.
+- MAX30102 LEDs are forced off before sleep.
+- OLED is commanded off.
+- WiFi is fully powered down (`WIFI_OFF`).
+- Expect low tens of µA in deep sleep once peripherals are quiet; measure with a real meter.
+- All thresholds, sample counts, and timing constants are in the **USER CONFIG** block at the top of the .ino – tweak freely.
 
 ### Battery Monitoring
-- Current plan: use the ESP32-C3 ADC with a simple voltage divider on the LiPo (or add a small INA219 later for better accuracy + current).
-- Publish voltage (and current if available) on both motion wakes and periodic timer wakes.
-- Optional future: low-voltage cutoff that forces a permanent deep sleep until charged.
-
-These notes are the starting point. Implementation details will be added to `Armband_Full.ino` as the skeleton is filled out.
+- Uses ADC + simple voltage divider (scale/offset adjustable).
+- Published on every wake (motion or timer).
+- Future: swap in INA219 for higher accuracy + current if needed.
 
 ## Repository Structure
 
@@ -83,7 +84,7 @@ armband-ppg-940nm/
 │   ├── README.md
 │   ├── MAX30102_Full_Monitor.ino      # Clean HR + SpO2 + Temp + OLED
 │   ├── MAX30102_HeartRate_Temp_OLED.ino
-│   └── Armband_Full.ino               # Main development firmware (all sensors)
+│   └── Armband_Full.ino               # Main development firmware (all sensors + deep sleep)
 └── firmware/pi-side/                 # Raspberry Pi side code (future)
 ```
 
@@ -97,5 +98,6 @@ armband-ppg-940nm/
    - PubSubClient (for MQTT)
 
 2. Open `firmware/Armband_Full.ino`
-3. Update WiFi + MQTT credentials
+3. Edit the **USER CONFIG** section (WiFi, MQTT user/pass, pins, motion threshold, battery scale, sleep timing)
 4. Upload to XIAO ESP32C3
+5. Open Serial Monitor at 115200 to watch wake / publish / sleep cycles

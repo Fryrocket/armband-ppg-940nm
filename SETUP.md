@@ -29,6 +29,40 @@ This guide walks through getting `Armband_Full.ino` running on a Seeed XIAO ESP3
 
 If your wiring is different, change the defines at the top of `Armband_Full.ino`.
 
+### Pre-flight: I²C Scanner (strongly recommended)
+
+Before uploading the main firmware, run a quick I²C scanner so you know which addresses are actually present. This prevents silent “sensor not found” failures caused by address conflicts or wiring mistakes.
+
+Typical addresses:
+- MAX30102 → usually `0x57`
+- LIS3DH → `0x18` or `0x19`
+- SSD1306 OLED → `0x3C` (sometimes `0x3D`)
+
+Paste this into a blank sketch, upload, and open Serial Monitor at **115200**:
+
+```cpp
+#include <Wire.h>
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  Serial.println("\nI2C scanner");
+  for (byte addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("Found device at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+    }
+  }
+  Serial.println("Done");
+}
+
+void loop() {}
+```
+
+If a sensor is missing from the list, fix the wiring or address before continuing.
+
 ---
 
 ## 2. Install Libraries
@@ -91,12 +125,9 @@ const uint8_t QUIET_WAKE_SKIP = 0;   // connect every wake while testing
 const uint64_t PERIODIC_WAKE_US = 60ULL * 1000000ULL;  // 1 minute for faster testing
 ```
 
-Once everything works, change back to:
-
-```cpp
-const uint8_t QUIET_WAKE_SKIP = 2;
-const uint64_t PERIODIC_WAKE_US = 180ULL * 1000000ULL;  // 3 minutes
-```
+> **⚠️ Battery warning**  
+> `QUIET_WAKE_SKIP = 0` makes the device connect to WiFi on **every** wake. This is excellent for debugging but will drain a 500 mAh cell in roughly 30–60 minutes of continuous testing.  
+> Unplug USB / stop the test when you are not actively watching Serial. Switch back to the production values (section 9) as soon as basic function is confirmed.
 
 ---
 
@@ -131,7 +162,11 @@ const float BATTERY_OFFSET = 0.0;
 ## 6. First Upload & What You Should See
 
 1. Upload `Armband_Full.ino`.
-2. Open Serial Monitor at **115200** baud.
+2. Open Serial Monitor.
+
+> **⚠️ MUST be 115200 baud**  
+> Set the Serial Monitor to **115200**. If you leave it at 9600 you will only see garbage characters.
+
 3. Expected output (approximate):
 
 ```
@@ -146,7 +181,10 @@ Connect time: 1840 ms
 Deep sleep... (boot #1, quietSkip=0)
 ```
 
-After the timer (or motion) the device wakes again, restores the previous motion EMA from RTC memory, and continues.
+After the timer (or motion) the device wakes again.
+
+**Why the motion value does not reset to zero**  
+The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. RTC memory survives deep sleep, so the filter continues from where it left off. This prevents a false “still” reading every time the device wakes.
 
 ---
 
@@ -154,11 +192,20 @@ After the timer (or motion) the device wakes again, restores the previous motion
 
 | Behaviour | How to check |
 |-----------|--------------|
-| RTC motion state | Move the armband, let it sleep, wake it – `motion` value should not restart near 0 |
+| RTC motion state | Move the armband, let it sleep, wake it – `motion` value should **not** restart near 0 |
 | State transitions | Move / stop while watching Serial for `[MOTION] still → MOVING` |
 | Wake-skip | Set `QUIET_WAKE_SKIP = 2`, keep still – every 3rd quiet wake should connect |
 | Connection time | Look at `conn_ms` in the JSON |
-| Deep sleep current | Measure with a multimeter in series (target: low tens of µA) |
+| Deep sleep current | See exact measurement method below |
+
+### Measuring deep-sleep current
+
+1. Disconnect the USB cable / USB-UART adapter completely.
+2. Power the board from the LiPo only.
+3. Put a multimeter in series between the battery positive terminal and the board’s power input (or the 3V3 rail if you prefer).
+4. Set the meter to µA range.
+5. Let the device enter deep sleep.
+6. Expect roughly **20–50 µA** once everything is quiet. Higher numbers usually mean a peripheral is still powered or WiFi did not fully shut down.
 
 ---
 
@@ -175,8 +222,9 @@ After the timer (or motion) the device wakes again, restores the previous motion
 - Subscribe manually: `mosquitto_sub -h <ip> -t armband/ppg -v`
 
 **MAX30102 or LIS3DH not found**
-- Confirm I²C wiring and pull-ups
-- Run an I²C scanner sketch to see which addresses respond
+- Run the I²C scanner from section 1
+- Confirm wiring and pull-ups
+- Some breakouts use different addresses – update the code if needed
 
 **Battery reading wildly wrong**
 - Confirm divider ratio and that `A1` is the correct pin
@@ -185,23 +233,37 @@ After the timer (or motion) the device wakes again, restores the previous motion
 **High current in deep sleep**
 - Confirm LEDs are off and `WiFi.mode(WIFI_OFF)` ran
 - Disconnect any USB-UART adapter while measuring
-- Check for continuously powered sensors or pull-ups to 3V3 that stay active
+- Check for continuously powered sensors or pull-ups that stay active
+
+**Garbage on Serial**
+- Baud rate is almost always wrong – set Monitor to **115200**
 
 ---
 
 ## 9. Returning to Normal Operation
 
-After testing:
+After testing, change the two values back to production settings:
 
 ```cpp
 const uint8_t QUIET_WAKE_SKIP = 2;
 const uint64_t PERIODIC_WAKE_US = 180ULL * 1000000ULL;  // 3 min
 ```
 
-Re-upload. The device will now spend most of its time in deep sleep and only connect when there is motion or every few quiet wakes.
+**You must re-upload** the sketch for these changes to take effect. Editing the defines alone does nothing until the new binary is flashed.
+
+With these settings the device spends most of its time in deep sleep and only connects when there is motion or every few quiet wakes.
+
+**Message volume note**  
+At 3-minute wakes with `QUIET_WAKE_SKIP = 2` you get roughly 400–500 MQTT messages per day. The firmware uses QoS 0 (PubSubClient default), which is appropriate. Confirm your broker can comfortably handle this volume; it is modest for a Raspberry Pi running Mosquitto.
 
 ---
 
 ## 10. Next After Setup Works
 
-See `NOTES.md` for tuning motion thresholds, 940 nm filtering, and later improvements (INA219, better artifact rejection, Pi-side logging, etc.).
+See **[NOTES.md](NOTES.md)** for:
+
+- Tuning motion thresholds and hysteresis
+- Tuning 940 nm filtering
+- Battery accuracy checks
+- Optional pure motion wake via LIS3DH INT
+- Later improvements (INA219, better artifact rejection, Pi-side logging, etc.)

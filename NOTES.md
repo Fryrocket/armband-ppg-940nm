@@ -31,6 +31,20 @@ Full implementation pushed into `firmware/Armband_Full.ino`:
 
 All tunable values live in the **USER CONFIG** block at the top of `Armband_Full.ino`.
 
+### Libraries added
+
+Created `platformio.ini` at repo root with exact library dependencies:
+
+- sparkfun/SparkFun MAX3010x Pulse and Proximity Sensor
+- adafruit/Adafruit SSD1306
+- adafruit/Adafruit GFX Library
+- adafruit/Adafruit LIS3DH
+- knolleary/PubSubClient
+
+README Quick Start updated with:
+- Precise Arduino IDE Library Manager search terms
+- PlatformIO one-command install/upload instructions
+
 ### README
 Status table and Deep Sleep Strategy section updated to match the new code.
 

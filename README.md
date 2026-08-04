@@ -41,6 +41,38 @@ Arm-worn device for exercise use, built around the **Seeed XIAO ESP32C3**.
 | MQTT Streaming                 | Skeleton    | `Armband_Full.ino` |
 | Motion Artifact Rejection      | Planned     | - |
 | Battery Monitoring             | Planned     | - |
+| Deep Sleep                     | Notes added | See below |
+
+## Deep Sleep Strategy (Notes)
+
+Battery life is critical on the 500 mAh LiPo. Target approach for `Armband_Full.ino`:
+
+### Wake Sources
+- **Ext0 / GPIO wake** on LIS3DH interrupt pin (or a dedicated motion threshold pin) for activity-triggered sampling.
+- **Timer wake** for periodic background reports (e.g. every 2–5 minutes) so MQTT still gets voltage + status even when still.
+- Combine both: motion events wake immediately; timer provides the heartbeat.
+
+### Recommended Flow
+1. On wake → quick settle delay (50–150 ms).
+2. Read LIS3DH (check motion magnitude / activity level).
+3. If motion above threshold → full PPG + 940 nm acquisition window, then publish.
+4. Always read battery voltage (ADC or future INA219) and publish a short status packet.
+5. Disconnect WiFi/MQTT cleanly.
+6. Re-arm wake sources and call `esp_deep_sleep_start()`.
+
+### Power Notes for XIAO ESP32C3
+- Use RTC-capable GPIO for the wake pin.
+- Turn off the MAX30102 LED and put sensors into low-power / sleep modes before deep sleep.
+- WiFi should be fully powered down (`WiFi.mode(WIFI_OFF)` or equivalent) before sleeping.
+- Expect ~10–30 µA range in deep sleep if peripherals are properly shut down; validate with a real meter.
+- Consider a short “post-motion awake” window (a few seconds) so multiple MQTT messages can finish before sleeping again.
+
+### Battery Monitoring
+- Current plan: use the ESP32-C3 ADC with a simple voltage divider on the LiPo (or add a small INA219 later for better accuracy + current).
+- Publish voltage (and current if available) on both motion wakes and periodic timer wakes.
+- Optional future: low-voltage cutoff that forces a permanent deep sleep until charged.
+
+These notes are the starting point. Implementation details will be added to `Armband_Full.ino` as the skeleton is filled out.
 
 ## Repository Structure
 

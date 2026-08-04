@@ -45,6 +45,26 @@ README Quick Start updated with:
 - Precise Arduino IDE Library Manager search terms
 - PlatformIO one-command install/upload instructions
 
+### Later same session – power & state improvements
+
+Implemented the three items raised in review:
+
+1. **RTC-persistent motion state**
+   - `rtcFilteredMotion` and `rtcIsMoving` now live in RTC memory (`RTC_DATA_ATTR`)
+   - EMA and hysteresis state survive deep sleep – no more ramp-from-zero on every wake
+
+2. **Wake-skip counter + connection timing**
+   - `QUIET_WAKE_SKIP` (default 2) – quiet wakes can skip WiFi/MQTT to save power
+   - Counter itself is also in RTC memory
+   - `connectTimeMs` measures WiFi + MQTT handshake duration and is published in the JSON
+
+3. **Motion state-transition logging**
+   - Detects `still → moving` and `moving → still`
+   - Prints clear Serial messages
+   - Adds `"trans":"still_to_moving"|"moving_to_still"|"none"` to the MQTT payload
+
+New JSON fields: `trans`, `conn_ms`, `boot`
+
 ---
 
 ## Detailed Next Steps
@@ -67,6 +87,9 @@ const char* MQTT_PASSWORD = "your_mqtt_pass";  // or "" if no auth
 // Example: if ADC reads 1.65 V when battery is 3.30 V → scale = 2.0
 const float BATTERY_SCALE  = 2.0;
 const float BATTERY_OFFSET = 0.0;
+
+// Power / skip behaviour
+const uint8_t QUIET_WAKE_SKIP = 2;   // 0 = connect every wake
 ```
 
 Also confirm these pins match your wiring:
@@ -90,12 +113,11 @@ pio device monitor
 ```
 
 What you should see:
-- Boot message
-- WiFi connection result
-- MQTT connection result
-- JSON payload printed
+- Boot message with boot count and reset reason
+- Motion state restored from RTC (no longer starts at zero)
+- Either a network connect + `conn_ms` value, or “Quiet wake – skipping network”
+- JSON payload (when network is used)
 - “Deep sleep...” message
-- Device goes quiet
 
 After ~3 minutes it should wake again and repeat.
 
@@ -114,7 +136,7 @@ After ~3 minutes it should wake again and repeat.
 
 Wear the armband and move normally (walking, arm swings, still periods).
 
-Watch Serial or MQTT for `motion` and `moving` values.
+Watch Serial for `[MOTION] still → MOVING` / `[MOTION] MOVING → still` and the `trans` field in MQTT.
 
 Adjust these in USER CONFIG:
 
@@ -124,7 +146,7 @@ Adjust these in USER CONFIG:
 | `MOTION_HYSTERESIS`   | Prevents rapid on/off chatter               | 0.5 – 1.2              |
 | `MOTION_EMA_ALPHA`    | How fast the filter tracks changes (higher = faster) | 0.15 – 0.35     |
 
-Goal: still periods report `moving: false`, normal activity reports `moving: true` without excessive flickering.
+Because the EMA now survives sleep, tuning should feel more consistent across wakes.
 
 ### 5. Tune 940 nm filtering
 
@@ -135,22 +157,17 @@ Watch `raw940` vs `filt940` in the JSON.
 | `RAW940_SAMPLES`      | Number of ADC samples averaged              | 4–16  |
 | `RAW940_EMA_ALPHA`    | Smoothing of the filtered value             | 0.1–0.3 |
 
-Higher sample counts + lower alpha = smoother but slower response.
-
 ### 6. Battery reading accuracy check
 
 1. Measure real battery voltage with a multimeter.
 2. Compare to the `batt` value published over MQTT.
 3. Adjust `BATTERY_SCALE` and `BATTERY_OFFSET` until they match across the useful range (≈3.3 V – 4.2 V).
 
-If the ADC is too noisy or inaccurate for your needs, plan to add an INA219 later.
-
 ### 7. Optional – enable pure motion wake
 
 1. Wire LIS3DH INT1 to pin D2 (or change `PIN_LIS3DH_INT`).
 2. In `goToDeepSleep()`, uncomment the two GPIO wake lines.
-3. Configure the LIS3DH interrupt registers if needed (still basic in current code).
-4. Test that motion wakes the device even before the timer expires.
+3. Test that motion wakes the device even before the timer expires.
 
 ### 8. Later improvements (after basics are solid)
 

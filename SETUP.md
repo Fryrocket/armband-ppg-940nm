@@ -56,6 +56,7 @@ void setup() {
     }
   }
   Serial.println("Done");
+  // If MAX30102 (0x57) is missing, check wiring and pull-ups first
 }
 
 void loop() {}
@@ -84,20 +85,17 @@ If a sensor is missing from the list, fix the wiring or address before continuin
 
 ### Option B – PlatformIO (recommended)
 
-A `platformio.ini` is already in the repo root. From the project folder:
+A `platformio.ini` is already in the repo root.
 
-```bash
-pio run          # downloads libraries automatically
-pio run -t upload
-pio device monitor
-```
+- **CLI**: from the project folder run `pio run -t upload` then `pio device monitor`
+- **GUI**: open the folder in VS Code with the PlatformIO extension installed – it will use the same `platformio.ini` and pull the libraries automatically.
 
 ---
 
 ## 3. Board & Port Settings (Arduino IDE)
 
 - Board: **Seeed XIAO ESP32C3**
-- Upload Speed: 921600 (or 460800 if unstable)
+- Upload Speed: **921600** (works on most machines). If the upload fails or is extremely slow, drop to **460800**.
 - USB CDC On Boot: Enabled (helps Serial after reset)
 - Port: select the XIAO’s serial port
 
@@ -114,9 +112,11 @@ const char* WIFI_SSID     = "your_ssid";
 const char* WIFI_PASSWORD = "your_password";
 
 const char* MQTT_SERVER   = "192.168.x.x";   // Raspberry Pi IP
-const char* MQTT_USER     = "armband";       // or "" if no auth
-const char* MQTT_PASSWORD = "your_pass";     // or "" if no auth
+const char* MQTT_USER     = "armband";       // or "" if broker has no auth
+const char* MQTT_PASSWORD = "your_pass";     // or "" if broker has no auth
 ```
+
+If your MQTT broker does **not** require authentication, set both `MQTT_USER` and `MQTT_PASSWORD` to empty strings (`""`). The firmware already handles that case.
 
 ### Recommended first-run settings
 
@@ -181,7 +181,7 @@ Connect time: 1840 ms
 Deep sleep... (boot #1, quietSkip=0)
 ```
 
-After the timer (or motion) the device wakes again.
+First connection is often slower (1.5–2.5 s) because of the full WiFi handshake. Later wakes are typically 800–1200 ms if the access point still has the device cached.
 
 **Why the motion value does not reset to zero**  
 The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. RTC memory survives deep sleep, so the filter continues from where it left off. This prevents a false “still” reading every time the device wakes.
@@ -194,7 +194,7 @@ The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. 
 |-----------|--------------|
 | RTC motion state | Move the armband, let it sleep, wake it – `motion` value should **not** restart near 0 |
 | State transitions | Move / stop while watching Serial for `[MOTION] still → MOVING` |
-| Wake-skip | Set `QUIET_WAKE_SKIP = 2`, keep still – every 3rd quiet wake should connect |
+| Wake-skip | Set `QUIET_WAKE_SKIP = 2` and keep the armband **perfectly still**. WiFi should skip 2 quiet wakes, then connect on the 3rd. Any small motion resets the skip counter. |
 | Connection time | Look at `conn_ms` in the JSON |
 | Deep sleep current | See exact measurement method below |
 
@@ -205,7 +205,8 @@ The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. 
 3. Put a multimeter in series between the battery positive terminal and the board’s power input (or the 3V3 rail if you prefer).
 4. Set the meter to µA range.
 5. Let the device enter deep sleep.
-6. Expect roughly **20–50 µA** once everything is quiet. Higher numbers usually mean a peripheral is still powered or WiFi did not fully shut down.
+6. Expect roughly **20–50 µA** once everything is quiet.  
+   I²C pull-ups draw a few µA by design and are normal. Total should still stay under ~100 µA. If you see **>200 µA**, suspect WiFi or the MAX30102 not shutting down properly.
 
 ---
 
@@ -218,7 +219,7 @@ The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. 
 
 **MQTT connects but nothing appears on the Pi**
 - Verify broker IP and that Mosquitto (or whatever you use) is listening on 1883
-- Check username/password
+- Check username/password (or that both are `""` if the broker has no auth)
 - Subscribe manually: `mosquitto_sub -h <ip> -t armband/ppg -v`
 
 **MAX30102 or LIS3DH not found**
@@ -233,7 +234,7 @@ The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. 
 **High current in deep sleep**
 - Confirm LEDs are off and `WiFi.mode(WIFI_OFF)` ran
 - Disconnect any USB-UART adapter while measuring
-- Check for continuously powered sensors or pull-ups that stay active
+- I²C pull-ups are normal (a few µA). >200 µA usually means WiFi or MAX30102 is still active
 
 **Garbage on Serial**
 - Baud rate is almost always wrong – set Monitor to **115200**
@@ -253,8 +254,8 @@ const uint64_t PERIODIC_WAKE_US = 180ULL * 1000000ULL;  // 3 min
 
 With these settings the device spends most of its time in deep sleep and only connects when there is motion or every few quiet wakes.
 
-**Message volume note**  
-At 3-minute wakes with `QUIET_WAKE_SKIP = 2` you get roughly 400–500 MQTT messages per day. The firmware uses QoS 0 (PubSubClient default), which is appropriate. Confirm your broker can comfortably handle this volume; it is modest for a Raspberry Pi running Mosquitto.
+**Message volume & QoS**  
+At 3-minute wakes with `QUIET_WAKE_SKIP = 2` you get roughly 400–500 MQTT messages per day. The firmware uses **QoS 0** (PubSubClient default). This is intentional for non-critical health telemetry (fire-and-forget). If you later need guaranteed delivery you would change the publish call to QoS 1 in the firmware itself.
 
 ---
 

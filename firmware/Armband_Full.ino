@@ -5,10 +5,11 @@
  * Features:
  *  - MAX30102 Heart Rate + SpO2 + Temp
  *  - LIS3DH motion detection with tunable threshold + filtering
+ *  - Hardware INT1 motion wake (active-low, latched, high-pass)
  *  - 940nm reflectance channel with multi-sample averaging + EMA filter
  *  - Battery voltage monitoring (ADC + divider)
  *  - Full WiFi + MQTT (user/pass support)
- *  - Deep sleep with timer + GPIO wake
+ *  - Deep sleep with 3-minute timer + GPIO INT1 wake
  *  - RTC-persistent motion EMA + isMoving state (survives deep sleep)
  *  - Wake-skip counter for quiet periods (saves WiFi power)
  *  - Connection-time measurement + motion state-transition logging
@@ -49,12 +50,17 @@ const char* MQTT_TOPIC    = "armband/ppg";
 #define PIN_940NM_EMITTER  D6          // TSAL6200 drive pin
 #define PIN_940NM_ADC      A0          // BPW34 via resistor to ADC
 #define PIN_BATTERY_ADC    A1          // Voltage divider from LiPo (hypothetical)
-#define PIN_LIS3DH_INT     D2          // LIS3DH INT1 for wake (optional)
+#define PIN_LIS3DH_INT     D2          // LIS3DH INT1 for hardware motion wake
 
-// --- Motion threshold (tune these) ---
+// --- Motion threshold (software EMA / hysteresis) ---
 const float MOTION_THRESHOLD     = 11.5;   // magnitude above ~g to count as moving
 const float MOTION_HYSTERESIS    = 0.8;    // to prevent chatter
 const float MOTION_EMA_ALPHA     = 0.25;   // filtering on magnitude (0.1–0.4)
+
+// --- Hardware INT1 threshold (tune these) ---
+// At ±2g, 1 LSB ≈ 16 mg. 10 LSB ≈ 160 mg
+const uint8_t INT1_THRESHOLD_LSB = 10;     // 5–30 recommended
+const uint8_t INT1_DURATION_LSB  = 5;      // debounce samples (1–10)
 
 // --- 940nm filtering ---
 const int   RAW940_SAMPLES       = 8;     // multi-sample average
@@ -66,7 +72,7 @@ const float BATTERY_OFFSET       = 0.0;
 const int   BATTERY_SAMPLES      = 12;
 
 // --- Deep sleep / power ---
-const uint64_t PERIODIC_WAKE_US  = 180ULL * 1000000ULL;  // 3 minutes timer wake
+const uint64_t PERIODIC_WAKE_US  = 180ULL * 1000000ULL;  // 3 minutes timer wake (backup)
 const unsigned long AWAKE_WINDOW_MS = 12000;             // stay awake after motion
 const unsigned long QUIET_AWAKE_MS  = 5500;              // shorter awake when quiet
 const unsigned long SETTLE_MS       = 120;
@@ -136,6 +142,83 @@ unsigned long wakeStart = 0;
 bool motionEventThisWake = false;
 bool doNetworkThisWake = true;       // decided in setup()
 unsigned long connectTimeMs = 0;     // WiFi + MQTT connect duration
+bool wokeFromMotion = false;         // true if this boot was caused by INT1
+
+// ---------------------------------------------------------------------------
+// LIS3DH INT1 hardware motion wake (active-low, latched)
+// ---------------------------------------------------------------------------
+void clearLIS3DH_INT1() {
+  // Reading INT1_SRC (0x31) clears the latched interrupt
+  Wire.beginTransmission(0x18);
+  Wire.write(0x31);                    // INT1_SRC
+  Wire.endTransmission(false);         // repeated start
+
+  Wire.requestFrom((uint8_t)0x18, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t status = Wire.read();
+    Serial.printf("[LIS3DH] INT1 cleared (status=0x%02X)\n", status);
+  }
+}
+
+void setupLIS3DH_INT1() {
+  // Use ±2g for better sensitivity on the interrupt generator
+  lis.setRange(LIS3DH_RANGE_2_G);
+
+  // CTRL_REG1: 100 Hz, XYZ enabled, normal mode
+  Wire.beginTransmission(0x18);
+  Wire.write(0x20);
+  Wire.write(0x57);
+  Wire.endTransmission();
+
+  // CTRL_REG2: high-pass filter on INT1 path (ignore gravity / slow tilt)
+  Wire.beginTransmission(0x18);
+  Wire.write(0x21);
+  Wire.write(0x09);                    // HP enabled for INT1
+  Wire.endTransmission();
+
+  // INT1_CFG: OR of X/Y/Z high events
+  Wire.beginTransmission(0x18);
+  Wire.write(0x30);
+  Wire.write(0x2A);                    // AOI=0 (OR), XHIE+YHIE+ZHIE
+  Wire.endTransmission();
+
+  // INT1_THS: threshold
+  Wire.beginTransmission(0x18);
+  Wire.write(0x32);
+  Wire.write(INT1_THRESHOLD_LSB);
+  Wire.endTransmission();
+
+  // INT1_DURATION: debounce
+  Wire.beginTransmission(0x18);
+  Wire.write(0x33);
+  Wire.write(INT1_DURATION_LSB);
+  Wire.endTransmission();
+
+  // CTRL_REG5: latch interrupt on INT1
+  Wire.beginTransmission(0x18);
+  Wire.write(0x24);
+  Wire.write(0x08);                    // LIR_INT1 = 1
+  Wire.endTransmission();
+
+  // CTRL_REG6: active-low interrupt polarity
+  Wire.beginTransmission(0x18);
+  Wire.write(0x25);                    // Note: some docs list polarity in REG6
+  // Actually polarity is in CTRL_REG6 (0x25) bit 1 = H_LACTIVE
+  // We write 0x02 for active-low + keep other bits clear
+  Wire.write(0x02);                    // H_LACTIVE = 1 (active low)
+  Wire.endTransmission();
+
+  // CTRL_REG3: route IA1 to INT1 pin
+  Wire.beginTransmission(0x18);
+  Wire.write(0x22);                    // CTRL_REG3
+  Wire.write(0x40);                    // I1_IA1 = 1
+  Wire.endTransmission();
+
+  // Make sure INT pin is an input (external pull-up recommended for open-drain)
+  pinMode(PIN_LIS3DH_INT, INPUT);
+
+  Serial.println("[LIS3DH] INT1 configured: active-low, latched, HP on, 160 mg");
+}
 
 // ---------------------------------------------------------------------------
 // Battery voltage (ADC + multi-sample)
@@ -359,17 +442,21 @@ void goToDeepSleep() {
   rtcFilteredMotion = filteredMotion;
   rtcIsMoving       = isMoving;
 
+  // Clear any pending interrupt so the pin returns high before we sleep
+  clearLIS3DH_INT1();
+
   prepareForSleep();
 
+  // 3-minute timer backup
   esp_sleep_enable_timer_wakeup(PERIODIC_WAKE_US);
 
-  // Optional GPIO wake from LIS3DH INT pin (active high)
-  // Uncomment and wire INT1 if you want pure motion wake
-  // gpio_wakeup_enable((gpio_num_t)PIN_LIS3DH_INT, GPIO_INTR_HIGH_LEVEL);
-  // esp_sleep_enable_gpio_wakeup();
+  // Hardware motion wake on INT1 (active-low)
+  // 0 = wake when pin goes LOW
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_LIS3DH_INT, 0);
 
   Serial.printf("Deep sleep... (boot #%u, quietSkip=%u)\n",
                 (unsigned)rtcBootCount, (unsigned)rtcQuietSkipCount);
+  Serial.println("Wake sources: INT1 (active-low) + 3 min timer");
   Serial.flush();
   delay(20);
   esp_deep_sleep_start();
@@ -391,11 +478,25 @@ void setup() {
   motionTransition = false;
   transitionStr = "none";
   connectTimeMs = 0;
+  wokeFromMotion = false;
 
   // Restore motion state that survived deep sleep
   filteredMotion = rtcFilteredMotion;
   isMoving       = rtcIsMoving;
   prevIsMoving   = isMoving;
+
+  // Detect wake reason
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[WAKE] Motion detected on INT1 (active-low)");
+    wokeFromMotion = true;
+    motionEventThisWake = true;
+    isMoving = true;                 // force active state on hardware wake
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    Serial.println("[WAKE] 3-minute timer");
+  } else {
+    Serial.println("[WAKE] Power-on / reset");
+  }
 
   // 940 nm emitter
   pinMode(PIN_940NM_EMITTER, OUTPUT);
@@ -428,11 +529,17 @@ void setup() {
   if (!lis.begin(0x18)) {
     if (!lis.begin(0x19)) {
       Serial.println("LIS3DH not found");
+    } else {
+      Serial.println("LIS3DH OK (0x19)");
+      setupLIS3DH_INT1();
     }
   } else {
-    lis.setRange(LIS3DH_RANGE_4_G);
-    Serial.println("LIS3DH OK");
+    Serial.println("LIS3DH OK (0x18)");
+    setupLIS3DH_INT1();
   }
+
+  // Always clear any residual latched interrupt after config / on wake
+  clearLIS3DH_INT1();
 
   // First sensor reads (motion uses restored RTC state)
   batteryVoltage = readBatteryVoltage();
@@ -440,8 +547,8 @@ void setup() {
   read940Filtered();
 
   // Decide whether this wake should use the network
-  // Always connect on motion events or when skip counter expires
-  if (motionEventThisWake || isMoving) {
+  // Always connect on motion events / hardware wake or when skip counter expires
+  if (motionEventThisWake || isMoving || wokeFromMotion) {
     doNetworkThisWake = true;
     rtcQuietSkipCount = 0;          // reset skip counter on activity
   } else {
@@ -531,7 +638,7 @@ void loop() {
 
   // ---------- Decision to sleep ----------
   unsigned long awake = millis() - wakeStart;
-  unsigned long targetAwake = motionEventThisWake ? AWAKE_WINDOW_MS : QUIET_AWAKE_MS;
+  unsigned long targetAwake = (motionEventThisWake || wokeFromMotion) ? AWAKE_WINDOW_MS : QUIET_AWAKE_MS;
 
   if (awake > targetAwake) {
     goToDeepSleep();

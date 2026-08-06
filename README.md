@@ -1,5 +1,8 @@
 # Armband PPG + 940nm Experimental Device
 
+> **Part of [BGM](https://github.com/Fryrocket/BGM)** – the umbrella wearable blood-glucose monitoring project.  
+> Companion edge-AI host: **[armband-ai](https://github.com/Fryrocket/armband-ai)** (Pi 5 + Hailo).
+
 Arm-worn device for exercise use, built around the **Seeed XIAO ESP32C3**.
 
 ## Goals

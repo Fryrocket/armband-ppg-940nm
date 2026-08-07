@@ -87,3 +87,62 @@ const uint8_t QUIET_WAKE_SKIP = 2;
 // =============================================================================
 // END USER CONFIG
 // =============================================================================
+
+// Objects
+MAX30105 particleSensor;
+Adafruit_LIS3DH lis = Adafruit_LIS3DH();
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+WiFiClient espClient;
+PubSubClient mqtt(espClient);
+
+// HR / SpO2
+const byte RATE_SIZE = 8;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+int beatAvg = 0;
+
+#define BUFFER_SIZE 100
+uint32_t irBuffer[BUFFER_SIZE];
+uint32_t redBuffer[BUFFER_SIZE];
+
+int32_t spo2;
+int8_t validSPO2;
+int32_t heartRate;
+int8_t validHeartRate;
+
+float temperature = 0;
+bool fingerDetected = false;
+
+// ---------- RTC-persistent state (survives deep sleep) ----------
+RTC_DATA_ATTR float    rtcFilteredMotion = 0;
+RTC_DATA_ATTR bool     rtcIsMoving       = false;
+RTC_DATA_ATTR uint32_t rtcBootCount      = 0;
+RTC_DATA_ATTR uint8_t  rtcQuietSkipCount = 0;   // how many quiet wakes we have skipped
+
+// Working copies (loaded from RTC at boot)
+float accelX = 0, accelY = 0, accelZ = 0;
+float motionMagnitude = 0;
+float filteredMotion = 0;
+bool  isMoving = false;
+bool  prevIsMoving = false;          // for transition detection
+bool  motionTransition = false;      // true if state changed this wake
+const char* transitionStr = "none";  // "still_to_moving" / "moving_to_still" / "none"
+
+// 940nm
+int raw940 = 0;
+float filtered940 = 0;
+
+// Battery
+float batteryVoltage = 0;
+
+// Timing & power
+unsigned long lastTempRead = 0;
+unsigned long lastMqttPublish = 0;
+unsigned long lastDisplayUpdate = 0;
+unsigned long wakeStart = 0;
+bool motionEventThisWake = false;
+bool doNetworkThisWake = true;       // decided in setup()
+unsigned long connectTimeMs = 0;     // WiFi + MQTT connect duration
+bool wokeFromMotion = false;         // true if this boot was caused by INT1

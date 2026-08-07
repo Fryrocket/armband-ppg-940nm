@@ -1,5 +1,23 @@
 # Project Notes – Armband PPG + 940nm
 
+## Session 2026-08-06 / 2026-08-07
+
+### Fixes applied to `firmware/Armband_Full.ino`
+
+1. **Deep-sleep wake (ESP32-C3)**  
+   - Replaced `esp_sleep_enable_ext0_wakeup()` with `esp_deep_sleep_enable_gpio_wakeup(BIT(PIN_LIS3DH_INT), ESP_GPIO_WAKEUP_GPIO_LOW)`.  
+   - Updated wake-cause check from `ESP_SLEEP_WAKEUP_EXT0` to `ESP_SLEEP_WAKEUP_GPIO`.  
+   - EXT0 is not the right path on C3; the GPIO deep-sleep API is what the XIAO ESP32-C3 needs. Requires a reasonably current Arduino-ESP32 core (≥ ~2.0.9).
+
+2. **MAX30102 PPG FIFO reading**  
+   - Buffer-fill loop now properly calls `check()` / `available()` / `getFIFOIR()` / `getFIFORed()` / `nextSample()` so new samples are pulled from the sensor over I2C and the read pointer advances.  
+   - Previously the loop just re-read the same cached value.  
+   - Finger-detect / beat-detect `irValue` now comes from the freshly filled buffer.
+
+These two changes should make motion INT1 wake reliable and stop the “same PPG sample forever” behavior.
+
+---
+
 ## Session 2026-08-03
 
 ### What was done
@@ -166,7 +184,7 @@ Watch `raw940` vs `filt940` in the JSON.
 ### 7. Optional – enable pure motion wake
 
 1. Wire LIS3DH INT1 to pin D2 (or change `PIN_LIS3DH_INT`).
-2. In `goToDeepSleep()`, uncomment the two GPIO wake lines.
+2. In `goToDeepSleep()`, the GPIO wake is now active (ESP32-C3 path).
 3. Test that motion wakes the device even before the timer expires.
 
 ### 8. Later improvements (after basics are solid)

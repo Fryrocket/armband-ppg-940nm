@@ -88,6 +88,7 @@ Battery life is critical on the 500 mAh LiPo. Current approach in `Armband_Full.
 
 | File | Purpose |
 |------|---------|
+| **[PINOUT.md](PINOUT.md)** | **Printable pinout + wire color card** – keep next to the soldering iron |
 | [SETUP.md](SETUP.md) | **Detailed setup instructions** – hardware, libraries, config, first run, troubleshooting |
 | [NOTES.md](NOTES.md) | Development log, tuning guides, open questions |
 | `firmware/Armband_Full.ino` | Main firmware |
@@ -97,6 +98,7 @@ Battery life is critical on the 500 mAh LiPo. Current approach in `Armband_Full.
 ```
 armband-ppg-940nm/
 ├── README.md
+├── PINOUT.md                      # Printable pinout + wire colors
 ├── SETUP.md                       # Detailed setup guide
 ├── NOTES.md                       # Development notes & tuning
 ├── platformio.ini

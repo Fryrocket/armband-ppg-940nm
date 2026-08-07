@@ -451,12 +451,12 @@ void goToDeepSleep() {
   esp_sleep_enable_timer_wakeup(PERIODIC_WAKE_US);
 
   // Hardware motion wake on INT1 (active-low)
-  // 0 = wake when pin goes LOW
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_LIS3DH_INT, 0);
+  // ESP32-C3 does not support EXT0 the same way; use deep-sleep GPIO wakeup
+  esp_deep_sleep_enable_gpio_wakeup(BIT(PIN_LIS3DH_INT), ESP_GPIO_WAKEUP_GPIO_LOW);
 
   Serial.printf("Deep sleep... (boot #%u, quietSkip=%u)\n",
                 (unsigned)rtcBootCount, (unsigned)rtcQuietSkipCount);
-  Serial.println("Wake sources: INT1 (active-low) + 3 min timer");
+  Serial.println("Wake sources: INT1 GPIO (active-low) + 3 min timer");
   Serial.flush();
   delay(20);
   esp_deep_sleep_start();
@@ -487,7 +487,7 @@ void setup() {
 
   // Detect wake reason
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+  if (cause == ESP_SLEEP_WAKEUP_GPIO) {
     Serial.println("[WAKE] Motion detected on INT1 (active-low)");
     wokeFromMotion = true;
     motionEventThisWake = true;
@@ -583,10 +583,26 @@ void loop() {
     mqtt.loop();
   }
 
-  // ---------- PPG buffer collection ----------
-  for (int i = 0; i < BUFFER_SIZE; i++) {
-    irBuffer[i]  = particleSensor.getIR();
-    redBuffer[i] = particleSensor.getRed();
+  // ---------- PPG buffer collection (proper FIFO drain) ----------
+  // Must call check() to pull new samples from the MAX30102 FIFO over I2C,
+  // then drain with getFIFOIR()/getFIFORed() + nextSample().
+  // The old getIR()/getRed() loop just re-read the same cached sample.
+  int samplesCollected = 0;
+  unsigned long fillStart = millis();
+  while (samplesCollected < BUFFER_SIZE && (millis() - fillStart < 2500)) {
+    particleSensor.check();   // poll sensor → library ring buffer
+    while (particleSensor.available() && samplesCollected < BUFFER_SIZE) {
+      irBuffer[samplesCollected]  = particleSensor.getFIFOIR();
+      redBuffer[samplesCollected] = particleSensor.getFIFORed();
+      particleSensor.nextSample();
+      samplesCollected++;
+    }
+    if (samplesCollected < BUFFER_SIZE) {
+      delay(4);  // brief pause so the sensor can produce more samples
+    }
+  }
+  if (samplesCollected < BUFFER_SIZE) {
+    Serial.printf("[PPG] collected only %d / %d samples\n", samplesCollected, BUFFER_SIZE);
   }
 
   maxim_heart_rate_and_oxygen_saturation(
@@ -594,7 +610,8 @@ void loop() {
     &spo2, &validSPO2, &heartRate, &validHeartRate
   );
 
-  long irValue = particleSensor.getIR();
+  // Prefer a freshly-read sample from the buffer we just filled
+  long irValue = (samplesCollected > 0) ? (long)irBuffer[samplesCollected - 1] : particleSensor.getIR();
   fingerDetected = (irValue >= 50000);
 
   if (fingerDetected && checkForBeat(irValue)) {

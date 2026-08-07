@@ -125,3 +125,9 @@ Short version:
    - Boot → configure INT1 → sleep
    - Motion on arm → immediate wake → publish → sleep
    - Or 3-minute timer wake when quiet
+
+## License
+
+**GNU GPLv3 or later** — see [LICENSE](LICENSE).
+
+Experimental research only. Not a medical device.

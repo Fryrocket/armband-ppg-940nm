@@ -7,9 +7,9 @@ Firmware: `firmware/Armband_Full.ino`
 Wire: 28 AWG silicone + JST-SH
 
 ### Direct schematic (PDF download)
-https://files.seeedstudio.com/wiki/XIAO_WiFi/Resources/XIAO_ESP32C3_v1.3_SCH_260116.pdf
+[https://files.seeedstudio.com/wiki/XIAO_WiFi/Resources/XIAO_ESP32C3_v1.3_SCH_260116.pdf](https://files.seeedstudio.com/wiki/XIAO_WiFi/Resources/XIAO_ESP32C3_v1.3_SCH_260116.pdf)
 
-Wiki / pin map: https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/
+Wiki / pin map: [https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/](https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/)
 
 ---
 

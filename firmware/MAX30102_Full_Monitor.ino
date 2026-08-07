@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Fryrocket
+
 #include <Wire.h>
 #include "MAX30105.h"
 #include "heartRate.h"

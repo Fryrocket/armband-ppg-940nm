@@ -52,7 +52,7 @@ const char* MQTT_TOPIC    = "armband/ppg";
 // --- Pins (XIAO ESP32C3) ---
 #define PIN_940NM_EMITTER  D6          // TSAL6200 drive pin
 #define PIN_940NM_ADC      A0          // BPW34 via resistor to ADC
-#define PIN_BATTERY_ADC    A1          // Voltage divider from LiPo (hypothetical)
+#define PIN_BATTERY_ADC    A1          // Voltage divider from LiPo
 #define PIN_LIS3DH_INT     D2          // LIS3DH INT1 for hardware motion wake
 
 // --- Motion threshold (software EMA / hysteresis) ---
@@ -92,6 +92,7 @@ const uint8_t QUIET_WAKE_SKIP = 2;
 MAX30105 particleSensor;
 Adafruit_LIS3DH lis = Adafruit_LIS3DH();
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
+uint8_t lis3dhAddr = 0x18;   // set in setup() to the address that responded
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
@@ -152,11 +153,11 @@ bool wokeFromMotion = false;         // true if this boot was caused by INT1
 // ---------------------------------------------------------------------------
 void clearLIS3DH_INT1() {
   // Reading INT1_SRC (0x31) clears the latched interrupt
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x31);                    // INT1_SRC
   Wire.endTransmission(false);         // repeated start
 
-  Wire.requestFrom((uint8_t)0x18, (uint8_t)1);
+  Wire.requestFrom(lis3dhAddr, (uint8_t)1);
   if (Wire.available()) {
     uint8_t status = Wire.read();
     Serial.printf("[LIS3DH] INT1 cleared (status=0x%02X)\n", status);
@@ -168,43 +169,43 @@ void setupLIS3DH_INT1() {
   lis.setRange(LIS3DH_RANGE_2_G);
 
   // CTRL_REG1: 100 Hz, XYZ enabled, normal mode
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x20);
   Wire.write(0x57);
   Wire.endTransmission();
 
   // CTRL_REG2: high-pass filter on INT1 path (ignore gravity / slow tilt)
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x21);
   Wire.write(0x09);                    // HP enabled for INT1
   Wire.endTransmission();
 
   // INT1_CFG: OR of X/Y/Z high events
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x30);
   Wire.write(0x2A);                    // AOI=0 (OR), XHIE+YHIE+ZHIE
   Wire.endTransmission();
 
   // INT1_THS: threshold
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x32);
   Wire.write(INT1_THRESHOLD_LSB);
   Wire.endTransmission();
 
   // INT1_DURATION: debounce
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x33);
   Wire.write(INT1_DURATION_LSB);
   Wire.endTransmission();
 
   // CTRL_REG5: latch interrupt on INT1
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x24);
   Wire.write(0x08);                    // LIR_INT1 = 1
   Wire.endTransmission();
 
   // CTRL_REG6: active-low interrupt polarity
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x25);                    // Note: some docs list polarity in REG6
   // Actually polarity is in CTRL_REG6 (0x25) bit 1 = H_LACTIVE
   // We write 0x02 for active-low + keep other bits clear
@@ -212,7 +213,7 @@ void setupLIS3DH_INT1() {
   Wire.endTransmission();
 
   // CTRL_REG3: route IA1 to INT1 pin
-  Wire.beginTransmission(0x18);
+  Wire.beginTransmission(lis3dhAddr);
   Wire.write(0x22);                    // CTRL_REG3
   Wire.write(0x40);                    // I1_IA1 = 1
   Wire.endTransmission();
@@ -529,16 +530,16 @@ void setup() {
   }
 
   // LIS3DH
-  if (!lis.begin(0x18)) {
-    if (!lis.begin(0x19)) {
-      Serial.println("LIS3DH not found");
-    } else {
-      Serial.println("LIS3DH OK (0x19)");
-      setupLIS3DH_INT1();
-    }
-  } else {
+  if (lis.begin(0x18)) {
+    lis3dhAddr = 0x18;
     Serial.println("LIS3DH OK (0x18)");
     setupLIS3DH_INT1();
+  } else if (lis.begin(0x19)) {
+    lis3dhAddr = 0x19;
+    Serial.println("LIS3DH OK (0x19)");
+    setupLIS3DH_INT1();
+  } else {
+    Serial.println("LIS3DH not found");
   }
 
   // Always clear any residual latched interrupt after config / on wake

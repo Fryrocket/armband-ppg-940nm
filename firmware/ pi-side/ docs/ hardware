@@ -1,4 +1,0 @@
-firmware/ .getkeep # Firmware folder for XIAO ESP32C3 MicroPython code
-pi-side/ .getkeep # Raspberry Pi side - logging, MQTT, dashboard, and ML
-docs/ .getkeep # Documentation, wiring diagrams, calibration notes
-hardware/ .getkeep # Photos, BOM, mounting notes

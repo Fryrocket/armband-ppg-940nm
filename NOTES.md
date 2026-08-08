@@ -1,5 +1,16 @@
 # Project Notes – Armband PPG + 940nm
 
+## Session 2026-08-08 – Drift monitor + insert-time soft validation (armband-ai / BGM)
+
+Cross-repo hardening (no firmware change):
+
+- **Drift monitor** (`armband-ai/src/armband_ai/drift_monitor.py`): still-only rolling median of `filt940` vs snapshot taken at last successful calibration (`models/drift_baseline.json`). Advisory `is_stale` when |Δ| ≥ threshold (default 40). Does not block inference and does not touch the frozen 17-float feature contract.
+- **Insert-time soft validation** (`armband-ai` `db.insert_reading`): BPM 35–220 and temp 30–45 °C are logged + clamped on write; row is never rejected (same pattern as SpO₂ < 0).
+
+See BGM `docs/ARCHITECTURE.md` / `docs/STATUS.md` and `armband-ai` README hardening list (items 3 & 5 → Done 2026-08-08).
+
+---
+
 ## Session 2026-08-08 – MLP training gate consistency (armband-ai)
 
 Second calibration-path fix applied to companion `armband-ai`:

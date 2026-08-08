@@ -83,12 +83,17 @@ If a sensor is missing from the list, fix the wiring or address before continuin
 
 3. Install the **esp32** board package if you haven’t already (`Boards Manager` → search “esp32” by Espressif).
 
+> **⚠️ Arduino-ESP32 core version**  
+> Use **≥ 2.0.9** (current is fine). The ESP32-C3 deep-sleep GPIO wake API (`esp_deep_sleep_enable_gpio_wakeup`) is not available / not correct on older cores. An old package is a common reason motion INT1 wake “does nothing.”
+
 ### Option B – PlatformIO (recommended)
 
 A `platformio.ini` is already in the repo root.
 
 - **CLI**: from the project folder run `pio run -t upload` then `pio device monitor`
 - **GUI**: open the folder in VS Code with the PlatformIO extension installed – it will use the same `platformio.ini` and pull the libraries automatically.
+
+PlatformIO’s `espressif32` platform pins a current enough core for the C3 GPIO wake path in normal installs; if motion wake fails after a clean flash, update the platform.
 
 ---
 
@@ -126,8 +131,9 @@ const uint64_t PERIODIC_WAKE_US = 60ULL * 1000000ULL;  // 1 minute for faster te
 ```
 
 > **⚠️ Battery warning**  
-> `QUIET_WAKE_SKIP = 0` makes the device connect to WiFi on **every** wake. This is excellent for debugging but will drain a 500 mAh cell in roughly 30–60 minutes of continuous testing.  
-> Unplug USB / stop the test when you are not actively watching Serial. Switch back to the production values (section 9) as soon as basic function is confirmed.
+> `QUIET_WAKE_SKIP = 0` makes the device connect to WiFi on **every** wake. This is excellent for debugging but will drain a 500 mAh cell in roughly **30–60 minutes** of continuous testing.  
+> Do **not** leave the bench unattended in this mode. Unplug / stop the test when you are not watching Serial. Switch back to the production values (section 9) as soon as basic function is confirmed.  
+> Production settings (`QUIET_WAKE_SKIP = 2`, 3‑minute timer) are what deliver multi‑hour / multi‑day life — not the first-run debug config.
 
 ---
 
@@ -226,6 +232,11 @@ The motion EMA (`filteredMotion`) and `isMoving` flag are stored in RTC memory. 
 - Run the I²C scanner from section 1
 - Confirm wiring and pull-ups
 - Some breakouts use different addresses – update the code if needed
+
+**Motion INT1 wake never fires**
+- Confirm Arduino-ESP32 core ≥ 2.0.9
+- INT1 → D2, active-low, latched; firmware must clear `INT1_SRC`
+- LIS3DH address 0x18 or 0x19 (firmware auto-detects)
 
 **Battery reading wildly wrong**
 - Confirm divider ratio and that `A1` is the correct pin

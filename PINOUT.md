@@ -61,7 +61,7 @@ Wiki / pin map: [https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/](htt
 | A3 / D3 | GPIO5 | Free                           |
 | D4      | GPIO6 | **SDA** (I²C)                  |
 | D5      | GPIO7 | **SCL** (I²C)                  |
-| D6      | GPIO21| **940 nm Emitter** (also TX)   |
+| D6      | GPIO21| **940 nm Emitter** — also UART0 TX. Serial **must** run over USB CDC (see SETUP.md / platformio.ini) or debug output is driven onto the emitter. |
 | D7      | GPIO20| RX (free if not using UART)    |
 | D8      | GPIO8 | SCK                            |
 | D9      | GPIO9 | MISO / Boot                    |
@@ -78,37 +78,3 @@ Wiki / pin map: [https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/](htt
 | SSD1306    | `0x3C` (sometimes `0x3D`) |
 
 Run the I²C scanner in `SETUP.md` before full assembly. Firmware stores the address that responds and uses it for INT1 config.
-
----
-
-## Battery Voltage Divider (A1)
-
-The divider senses the raw LiPo voltage (tapped from the battery side of the onboard charge circuit):
-
-```
-LiPo+ ── 100 kΩ ──┬── A1
-                  │
-                100 kΩ
-                  │
-                 GND
-```
-
-`BATTERY_SCALE = 2.0` in firmware (adjust after multimeter calibration).
-
----
-
-## Quick Soldering Order (MCU side)
-
-1. **Red**  → **Onboard battery pads / JST** (LiPo+) — **never** the 3V3 header pin
-2. **Black** → GND
-3. **White** → D4 (SDA)
-4. **Yellow** → D5 (SCL)
-5. **Green** → D2 (INT1)
-6. **Blue**  → D6 (940 nm emitter)
-7. Spare labeled wires → A0 (940 nm ADC) and A1 (battery sense)
-
-Leave a small service loop and secure JST-SH shells later so flexing the armband does not stress the solder joints.
-
----
-
-*Part of [BGM](https://github.com/Fryrocket/BGM) · Firmware: [armband-ppg-940nm](https://github.com/Fryrocket/armband-ppg-940nm)*

@@ -23,15 +23,16 @@ Wiki / pin map: [https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/](htt
 | **I²C SCL**           | **D5**                 | GPIO7     | **Yellow**                | MAX30102 + LIS3DH + OLED |
 | **LIS3DH INT1**       | **D2**                 | GPIO4     | **Green**                 | Hardware motion wake (active-low) |
 | **940 nm Emitter**    | **D6**                 | GPIO21    | **Blue**                  | TSAL6200 drive |
-| **940 nm ADC**        | **A0**                 | GPIO2     | Green / leftover          | BPW34 → resistor → ADC |
-| **Battery ADC**       | **A1**                 | GPIO3     | Yellow / leftover         | Voltage divider from LiPo |
+| **940 nm ADC**        | **A0**                 | GPIO2     | **Spare (label ends)**    | BPW34 → resistor → ADC; do **not** reuse INT1 Green |
+| **Battery ADC**       | **A1**                 | GPIO3     | **Spare (label ends)**    | Voltage divider from LiPo; do **not** reuse SCL Yellow |
 
 > **⚠ Critical power rule**  
 > Connect the LiPo **only** to the XIAO’s onboard battery pads / JST connector.  
 > Do **not** solder raw LiPo+ to the 3V3 pin. A charged cell sits at ~4.2 V and will over-voltage the 3.3 V rail and all peripherals (MAX30102 / LIS3DH / OLED). Using the battery pads also keeps the onboard charge management working.
 
 > **Color rule:** same color on both ends of every wire.  
-> Power pair (Red/Black) on its own 2-pin JST-SH for easy battery disconnect.
+> Power pair (Red/Black) on its own 2-pin JST-SH for easy battery disconnect.  
+> Primary colors (Red/Black/White/Yellow/Green/Blue) are reserved as above — use any remaining spool color for A0/A1 and label both ends.
 
 ---
 
@@ -76,7 +77,7 @@ Wiki / pin map: [https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/](htt
 | LIS3DH     | `0x18` or `0x19` |
 | SSD1306    | `0x3C` (sometimes `0x3D`) |
 
-Run the I²C scanner in `SETUP.md` before full assembly.
+Run the I²C scanner in `SETUP.md` before full assembly. Firmware stores the address that responds and uses it for INT1 config.
 
 ---
 
@@ -104,7 +105,7 @@ LiPo+ ── 100 kΩ ──┬── A1
 4. **Yellow** → D5 (SCL)
 5. **Green** → D2 (INT1)
 6. **Blue**  → D6 (940 nm emitter)
-7. Remaining colors → A0 (940 nm) and A1 (battery sense)
+7. Spare labeled wires → A0 (940 nm ADC) and A1 (battery sense)
 
 Leave a small service loop and secure JST-SH shells later so flexing the armband does not stress the solder joints.
 

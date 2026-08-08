@@ -68,7 +68,7 @@ Battery life is critical on the 500 mAh LiPo. Current approach in `Armband_Full.
 - Active-low polarity
 
 ### Flow
-1. On wake → detect cause (EXT0 motion / timer / power-on).
+1. On wake → detect cause (GPIO INT1 motion / timer / power-on).
 2. Clear any latched INT1 interrupt.
 3. Restore RTC motion state (EMA + isMoving).
 4. Read battery, 940 nm, and run PPG if finger present.
@@ -107,7 +107,6 @@ armband-ppg-940nm/
 │   ├── MAX30102_Full_Monitor.ino
 │   ├── MAX30102_HeartRate_Temp_OLED.ino
 │   └── Armband_Full.ino           # Main firmware (with INT1 wake)
-└── firmware/pi-side/
 ```
 
 ## Quick Start

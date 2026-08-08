@@ -1,5 +1,24 @@
 # Project Notes – Armband PPG + 940nm
 
+## Session 2026-08-08 – MLP training gate consistency (armband-ai)
+
+Second calibration-path fix applied to companion `armband-ai`:
+
+`scripts/train_mlp_onnx.py` previously:
+
+1. Called `build_calibration_pairs()` **without** `min_clean_streak`, so the consecutive-clean gate used by `calibrate.py` and `train_multifeature.py` was silently ignored for the MLP path.
+2. Re-pulled raw PPG rows and re-filtered stillness with an ad-hoc rule (`>=4 still samples`) that did **not** match `prefer_still` (any still sample ⇒ filter to still-only). The `quality_score` attached to a training row could therefore describe a different candidate window than the feature vector that was actually trained on.
+
+Fix:
+
+- Passes `min_clean_streak` (CLI default 10; 0 = off) through to `build_calibration_pairs`.
+- Re-filter now mirrors `prefer_still` exactly.
+- Added `--min-clean-streak` and `--no-prefer-still` CLI flags for parity with the other training scripts.
+
+See `armband-ai` commit and BGM `docs/STATUS.md`.
+
+---
+
 ## Session 2026-08-08 – AI calibration gate-order fixes (armband-ai)
 
 The companion `armband-ai` repo received the final quality-score ordering fix so all three calibration gates now evaluate the **raw** window:

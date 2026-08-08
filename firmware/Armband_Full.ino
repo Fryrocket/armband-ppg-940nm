@@ -146,3 +146,523 @@ bool motionEventThisWake = false;
 bool doNetworkThisWake = true;       // decided in setup()
 unsigned long connectTimeMs = 0;     // WiFi + MQTT connect duration
 bool wokeFromMotion = false;         // true if this boot was caused by INT1
+
+// ---------------------------------------------------------------------------
+// LIS3DH INT1 hardware motion wake (active-low, latched)
+// ---------------------------------------------------------------------------
+void clearLIS3DH_INT1() {
+  // Reading INT1_SRC (0x31) clears the latched interrupt
+  Wire.beginTransmission(0x18);
+  Wire.write(0x31);                    // INT1_SRC
+  Wire.endTransmission(false);         // repeated start
+
+  Wire.requestFrom((uint8_t)0x18, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t status = Wire.read();
+    Serial.printf("[LIS3DH] INT1 cleared (status=0x%02X)\n", status);
+  }
+}
+
+void setupLIS3DH_INT1() {
+  // Use ±2g for better sensitivity on the interrupt generator
+  lis.setRange(LIS3DH_RANGE_2_G);
+
+  // CTRL_REG1: 100 Hz, XYZ enabled, normal mode
+  Wire.beginTransmission(0x18);
+  Wire.write(0x20);
+  Wire.write(0x57);
+  Wire.endTransmission();
+
+  // CTRL_REG2: high-pass filter on INT1 path (ignore gravity / slow tilt)
+  Wire.beginTransmission(0x18);
+  Wire.write(0x21);
+  Wire.write(0x09);                    // HP enabled for INT1
+  Wire.endTransmission();
+
+  // INT1_CFG: OR of X/Y/Z high events
+  Wire.beginTransmission(0x18);
+  Wire.write(0x30);
+  Wire.write(0x2A);                    // AOI=0 (OR), XHIE+YHIE+ZHIE
+  Wire.endTransmission();
+
+  // INT1_THS: threshold
+  Wire.beginTransmission(0x18);
+  Wire.write(0x32);
+  Wire.write(INT1_THRESHOLD_LSB);
+  Wire.endTransmission();
+
+  // INT1_DURATION: debounce
+  Wire.beginTransmission(0x18);
+  Wire.write(0x33);
+  Wire.write(INT1_DURATION_LSB);
+  Wire.endTransmission();
+
+  // CTRL_REG5: latch interrupt on INT1
+  Wire.beginTransmission(0x18);
+  Wire.write(0x24);
+  Wire.write(0x08);                    // LIR_INT1 = 1
+  Wire.endTransmission();
+
+  // CTRL_REG6: active-low interrupt polarity
+  Wire.beginTransmission(0x18);
+  Wire.write(0x25);                    // Note: some docs list polarity in REG6
+  // Actually polarity is in CTRL_REG6 (0x25) bit 1 = H_LACTIVE
+  // We write 0x02 for active-low + keep other bits clear
+  Wire.write(0x02);                    // H_LACTIVE = 1 (active low)
+  Wire.endTransmission();
+
+  // CTRL_REG3: route IA1 to INT1 pin
+  Wire.beginTransmission(0x18);
+  Wire.write(0x22);                    // CTRL_REG3
+  Wire.write(0x40);                    // I1_IA1 = 1
+  Wire.endTransmission();
+
+  // Make sure INT pin is an input (external pull-up recommended for open-drain)
+  pinMode(PIN_LIS3DH_INT, INPUT);
+
+  Serial.println("[LIS3DH] INT1 configured: active-low, latched, HP on, 160 mg");
+}
+
+// ---------------------------------------------------------------------------
+// Battery voltage (ADC + multi-sample)
+// ---------------------------------------------------------------------------
+float readBatteryVoltage() {
+  long sum = 0;
+  for (int i = 0; i < BATTERY_SAMPLES; i++) {
+    sum += analogRead(PIN_BATTERY_ADC);
+    delayMicroseconds(40);
+  }
+  float raw = sum / (float)BATTERY_SAMPLES;
+  float volts = (raw / 4095.0f) * 3.3f * BATTERY_SCALE + BATTERY_OFFSET;
+  return volts;
+}
+
+// ---------------------------------------------------------------------------
+// 940 nm with multi-sample + EMA
+// ---------------------------------------------------------------------------
+float read940Filtered() {
+  long sum = 0;
+  digitalWrite(PIN_940NM_EMITTER, HIGH);
+  delayMicroseconds(30);
+  for (int i = 0; i < RAW940_SAMPLES; i++) {
+    sum += analogRead(PIN_940NM_ADC);
+    delayMicroseconds(20);
+  }
+  digitalWrite(PIN_940NM_EMITTER, LOW);
+
+  float avg = sum / (float)RAW940_SAMPLES;
+
+  if (filtered940 < 1.0f) {
+    filtered940 = avg;
+  } else {
+    filtered940 = RAW940_EMA_ALPHA * avg + (1.0f - RAW940_EMA_ALPHA) * filtered940;
+  }
+  raw940 = (int)avg;
+  return filtered940;
+}
+
+// ---------------------------------------------------------------------------
+// Motion with EMA + hysteresis + transition logging
+// Uses RTC-persisted filteredMotion / isMoving
+// ---------------------------------------------------------------------------
+void updateMotion() {
+  sensors_event_t event;
+  lis.getEvent(&event);
+  accelX = event.acceleration.x;
+  accelY = event.acceleration.y;
+  accelZ = event.acceleration.z;
+
+  float mag = sqrtf(accelX*accelX + accelY*accelY + accelZ*accelZ);
+  motionMagnitude = mag;
+
+  // Continue EMA from the value that survived deep sleep
+  if (filteredMotion < 0.05f) {
+    filteredMotion = mag;          // first-ever sample
+  } else {
+    filteredMotion = MOTION_EMA_ALPHA * mag + (1.0f - MOTION_EMA_ALPHA) * filteredMotion;
+  }
+
+  prevIsMoving = isMoving;
+
+  // Hysteresis
+  if (isMoving) {
+    if (filteredMotion < (MOTION_THRESHOLD - MOTION_HYSTERESIS)) {
+      isMoving = false;
+    }
+  } else {
+    if (filteredMotion > MOTION_THRESHOLD) {
+      isMoving = true;
+      motionEventThisWake = true;
+    }
+  }
+
+  // Detect and log transitions
+  motionTransition = (isMoving != prevIsMoving);
+  if (motionTransition) {
+    if (isMoving) {
+      transitionStr = "still_to_moving";
+      Serial.println("[MOTION] still → MOVING");
+    } else {
+      transitionStr = "moving_to_still";
+      Serial.println("[MOTION] MOVING → still");
+    }
+  } else {
+    transitionStr = "none";
+  }
+
+  // Keep RTC copies up to date so they survive the next sleep
+  rtcFilteredMotion = filteredMotion;
+  rtcIsMoving       = isMoving;
+}
+
+// ---------------------------------------------------------------------------
+// WiFi + MQTT with timing
+// ---------------------------------------------------------------------------
+void setupWiFi() {
+  Serial.print("WiFi");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 25) {
+    delay(400);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(" OK");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println(" FAILED");
+  }
+}
+
+void reconnectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) return;
+
+  bool ok;
+  if (strlen(MQTT_USER) > 0) {
+    ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD);
+  } else {
+    ok = mqtt.connect(MQTT_CLIENT_ID);
+  }
+  if (ok) {
+    Serial.println("MQTT connected");
+  } else {
+    Serial.print("MQTT fail rc=");
+    Serial.println(mqtt.state());
+  }
+}
+
+void publishData() {
+  if (!mqtt.connected()) return;
+
+  char payload[280];
+  snprintf(payload, sizeof(payload),
+    "{\"bpm\":%d,\"spo2\":%d,\"temp\":%.1f,\"motion\":%.2f,\"moving\":%s,"
+    "\"raw940\":%d,\"filt940\":%.1f,\"batt\":%.2f,"
+    "\"trans\":\"%s\",\"conn_ms\":%lu,\"boot\":%u}",
+    beatAvg,
+    validSPO2 ? spo2 : -1,
+    temperature,
+    filteredMotion,
+    isMoving ? "true" : "false",
+    raw940,
+    filtered940,
+    batteryVoltage,
+    transitionStr,
+    connectTimeMs,
+    (unsigned)rtcBootCount
+  );
+
+  mqtt.publish(MQTT_TOPIC, payload);
+  Serial.println(payload);
+}
+
+// ---------------------------------------------------------------------------
+// OLED (brief use only)
+// ---------------------------------------------------------------------------
+void updateDisplay() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  if (!fingerDetected) {
+    display.setTextSize(2);
+    display.setCursor(18, 20);
+    display.println("No Finger");
+  } else {
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("BPM ");
+    display.setTextSize(2);
+    display.print(beatAvg);
+
+    display.setTextSize(1);
+    display.setCursor(70, 0);
+    display.print("SpO2");
+    display.setTextSize(2);
+    display.setCursor(70, 12);
+    if (validSPO2) display.print(spo2);
+    else display.print("--");
+
+    display.setTextSize(1);
+    display.setCursor(0, 40);
+    display.print("Mot:");
+    display.print(filteredMotion, 1);
+    display.print(isMoving ? " MOV" : " still");
+
+    display.setCursor(0, 52);
+    display.print("940:");
+    display.print((int)filtered940);
+    display.print(" V:");
+    display.print(batteryVoltage, 2);
+  }
+  display.display();
+}
+
+// ---------------------------------------------------------------------------
+// Power-down helpers before deep sleep
+// ---------------------------------------------------------------------------
+void prepareForSleep() {
+  digitalWrite(PIN_940NM_EMITTER, LOW);
+
+  particleSensor.setPulseAmplitudeRed(0);
+  particleSensor.setPulseAmplitudeIR(0);
+  particleSensor.setPulseAmplitudeGreen(0);
+
+  display.ssd1306_command(SSD1306_DISPLAYOFF);
+
+  if (mqtt.connected()) {
+    mqtt.disconnect();
+  }
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(40);
+}
+
+void goToDeepSleep() {
+  // Make sure latest motion state is stored in RTC
+  rtcFilteredMotion = filteredMotion;
+  rtcIsMoving       = isMoving;
+
+  // Clear any pending interrupt so the pin returns high before we sleep
+  clearLIS3DH_INT1();
+
+  prepareForSleep();
+
+  // 3-minute timer backup
+  esp_sleep_enable_timer_wakeup(PERIODIC_WAKE_US);
+
+  // Hardware motion wake on INT1 (active-low)
+  // ESP32-C3 does not support EXT0 the same way; use deep-sleep GPIO wakeup
+  esp_deep_sleep_enable_gpio_wakeup(BIT(PIN_LIS3DH_INT), ESP_GPIO_WAKEUP_GPIO_LOW);
+
+  Serial.printf("Deep sleep... (boot #%u, quietSkip=%u)\n",
+                (unsigned)rtcBootCount, (unsigned)rtcQuietSkipCount);
+  Serial.println("Wake sources: INT1 GPIO (active-low) + 3 min timer");
+  Serial.flush();
+  delay(20);
+  esp_deep_sleep_start();
+}
+
+// ---------------------------------------------------------------------------
+// Setup / Loop
+// ---------------------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);
+  delay(SETTLE_MS);
+
+  rtcBootCount++;
+  Serial.printf("\n=== Armband wake  boot #%u  reset=%d ===\n",
+                (unsigned)rtcBootCount, (int)esp_reset_reason());
+
+  wakeStart = millis();
+  motionEventThisWake = false;
+  motionTransition = false;
+  transitionStr = "none";
+  connectTimeMs = 0;
+  wokeFromMotion = false;
+
+  // Restore motion state that survived deep sleep
+  filteredMotion = rtcFilteredMotion;
+  isMoving       = rtcIsMoving;
+  prevIsMoving   = isMoving;
+
+  // Detect wake reason
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+    Serial.println("[WAKE] Motion detected on INT1 (active-low)");
+    wokeFromMotion = true;
+    motionEventThisWake = true;
+    isMoving = true;                 // force active state on hardware wake
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    Serial.println("[WAKE] 3-minute timer");
+  } else {
+    Serial.println("[WAKE] Power-on / reset");
+  }
+
+  // 940 nm emitter
+  pinMode(PIN_940NM_EMITTER, OUTPUT);
+  digitalWrite(PIN_940NM_EMITTER, LOW);
+
+  // OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found");
+  } else {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("Armband waking...");
+    display.display();
+  }
+
+  // MAX30102
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    Serial.println("MAX30102 not found");
+  } else {
+    particleSensor.setup(60, 4, 2, 100, 411, 4096);
+    particleSensor.setPulseAmplitudeRed(0x1F);
+    particleSensor.setPulseAmplitudeIR(0x1F);
+    particleSensor.setPulseAmplitudeGreen(0);
+    Serial.println("MAX30102 OK");
+  }
+
+  // LIS3DH
+  if (!lis.begin(0x18)) {
+    if (!lis.begin(0x19)) {
+      Serial.println("LIS3DH not found");
+    } else {
+      Serial.println("LIS3DH OK (0x19)");
+      setupLIS3DH_INT1();
+    }
+  } else {
+    Serial.println("LIS3DH OK (0x18)");
+    setupLIS3DH_INT1();
+  }
+
+  // Always clear any residual latched interrupt after config / on wake
+  clearLIS3DH_INT1();
+
+  // First sensor reads (motion uses restored RTC state)
+  batteryVoltage = readBatteryVoltage();
+  updateMotion();
+  read940Filtered();
+
+  // Decide whether this wake should use the network
+  // Always connect on motion events / hardware wake or when skip counter expires
+  if (motionEventThisWake || isMoving || wokeFromMotion) {
+    doNetworkThisWake = true;
+    rtcQuietSkipCount = 0;          // reset skip counter on activity
+  } else {
+    if (rtcQuietSkipCount >= QUIET_WAKE_SKIP) {
+      doNetworkThisWake = true;
+      rtcQuietSkipCount = 0;
+    } else {
+      doNetworkThisWake = false;
+      rtcQuietSkipCount++;
+      Serial.printf("Quiet wake – skipping network (%u/%u)\n",
+                    (unsigned)rtcQuietSkipCount, (unsigned)QUIET_WAKE_SKIP);
+    }
+  }
+
+  if (doNetworkThisWake) {
+    unsigned long t0 = millis();
+    setupWiFi();
+    mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+    reconnectMQTT();
+    connectTimeMs = millis() - t0;
+    Serial.printf("Connect time: %lu ms\n", connectTimeMs);
+
+    publishData();
+  } else {
+    Serial.println("No network this wake");
+  }
+}
+
+void loop() {
+  if (doNetworkThisWake) {
+    if (!mqtt.connected()) reconnectMQTT();
+    mqtt.loop();
+  }
+
+  // ---------- PPG buffer collection (proper FIFO drain) ----------
+  // Must call check() to pull new samples from the MAX30102 FIFO over I2C,
+  // then drain with getFIFOIR()/getFIFORed() + nextSample().
+  // The old getIR()/getRed() loop just re-read the same cached sample.
+  int samplesCollected = 0;
+  unsigned long fillStart = millis();
+  while (samplesCollected < BUFFER_SIZE && (millis() - fillStart < 2500)) {
+    particleSensor.check();   // poll sensor → library ring buffer
+    while (particleSensor.available() && samplesCollected < BUFFER_SIZE) {
+      irBuffer[samplesCollected]  = particleSensor.getFIFOIR();
+      redBuffer[samplesCollected] = particleSensor.getFIFORed();
+      particleSensor.nextSample();
+      samplesCollected++;
+    }
+    if (samplesCollected < BUFFER_SIZE) {
+      delay(4);  // brief pause so the sensor can produce more samples
+    }
+  }
+  if (samplesCollected < BUFFER_SIZE) {
+    Serial.printf("[PPG] collected only %d / %d samples\n", samplesCollected, BUFFER_SIZE);
+  }
+
+  maxim_heart_rate_and_oxygen_saturation(
+    irBuffer, BUFFER_SIZE, redBuffer,
+    &spo2, &validSPO2, &heartRate, &validHeartRate
+  );
+
+  // Prefer a freshly-read sample from the buffer we just filled
+  long irValue = (samplesCollected > 0) ? (long)irBuffer[samplesCollected - 1] : particleSensor.getIR();
+  fingerDetected = (irValue >= 50000);
+
+  if (fingerDetected && checkForBeat(irValue)) {
+    long delta = millis() - lastBeat;
+    lastBeat = millis();
+    float bpm = 60.0f / (delta / 1000.0f);
+    if (bpm > 40 && bpm < 180) {
+      rates[rateSpot++] = (byte)bpm;
+      rateSpot %= RATE_SIZE;
+      beatAvg = 0;
+      for (byte i = 0; i < RATE_SIZE; i++) beatAvg += rates[i];
+      beatAvg /= RATE_SIZE;
+    }
+  }
+  if (validHeartRate && heartRate > 40 && heartRate < 180) {
+    beatAvg = heartRate;
+  }
+
+  // ---------- Sensors ----------
+  updateMotion();
+  read940Filtered();
+
+  if (millis() - lastTempRead > 4000) {
+    temperature = particleSensor.readTemperature();
+    lastTempRead = millis();
+  }
+
+  batteryVoltage = readBatteryVoltage();
+
+  // ---------- Display ----------
+  if (millis() - lastDisplayUpdate > 250) {
+    updateDisplay();
+    lastDisplayUpdate = millis();
+  }
+
+  // ---------- MQTT (only if we decided to network this wake) ----------
+  if (doNetworkThisWake && (millis() - lastMqttPublish > 1500)) {
+    publishData();
+    lastMqttPublish = millis();
+  }
+
+  // ---------- Decision to sleep ----------
+  unsigned long awake = millis() - wakeStart;
+  unsigned long targetAwake = (motionEventThisWake || wokeFromMotion) ? AWAKE_WINDOW_MS : QUIET_AWAKE_MS;
+
+  if (awake > targetAwake) {
+    goToDeepSleep();
+  }
+
+  delay(20);
+}

@@ -1,5 +1,19 @@
 # Project Notes – Armband PPG + 940nm
 
+## Session 2026-08-08 – AI calibration gate-order fixes (armband-ai)
+
+The companion `armband-ai` repo received the final quality-score ordering fix so all three calibration gates now evaluate the **raw** window:
+
+1. **still_fraction** – computed on the unfiltered window before prefer-still.
+2. **quality_score** – now scored via `score_window(raw_feats)` before prefer-still (previously ran on the already-cleaned subset and was artificially inflated).
+3. **max_clean_streak / clean_fraction** – consecutive still + optically stable run length, also gated on the raw window.
+
+Prefer-still still controls which samples are averaged into `filt940_mean`; it no longer affects what is scored or gated. See `armband-ai` `src/armband_ai/calibration.py` and BGM `docs/STATUS.md` for the full write-up.
+
+These changes only affect the Pi-side pairing / model training path. Firmware behaviour is unchanged.
+
+---
+
 ## Session 2026-08-06 / 2026-08-07
 
 ### Fixes applied to `firmware/Armband_Full.ino`

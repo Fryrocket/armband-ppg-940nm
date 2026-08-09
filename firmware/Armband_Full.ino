@@ -17,6 +17,7 @@
  *  - Wake-skip counter for quiet periods (saves WiFi power)
  *  - Connection-time measurement + motion state-transition logging
  *  - maxOk/lisOk sensor gates; gpio hold on 940 nm emitter; suppress phantom GPIO-wake transition
+ *  - RTC EMA seed flags (no magic thresholds); static_assert on wake GPIO range
  *
  * Edit the USER CONFIG section for your network, pins, and thresholds.
  */
@@ -34,10 +35,6 @@
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
-
-// =============================================================================
-// USER CONFIG – edit these
-// =============================================================================
 
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
@@ -75,10 +72,6 @@ const unsigned long SETTLE_MS       = 120;
 
 const uint8_t QUIET_WAKE_SKIP = 2;
 
-// =============================================================================
-// END USER CONFIG
-// =============================================================================
-
 MAX30105 particleSensor;
 Adafruit_LIS3DH lis = Adafruit_LIS3DH();
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
@@ -113,6 +106,8 @@ RTC_DATA_ATTR float    rtcFilteredMotion = 0;
 RTC_DATA_ATTR bool     rtcIsMoving       = false;
 RTC_DATA_ATTR uint32_t rtcBootCount      = 0;
 RTC_DATA_ATTR uint8_t  rtcQuietSkipCount = 0;
+RTC_DATA_ATTR bool     rtcHave940        = false;
+RTC_DATA_ATTR bool     rtcHaveMotion     = false;
 
 float accelX = 0, accelY = 0, accelZ = 0;
 float motionMagnitude = 0;
@@ -180,8 +175,12 @@ float read940Filtered() {
   }
   digitalWrite(PIN_940NM_EMITTER, LOW);
   float avg = sum / (float)RAW940_SAMPLES;
-  if (filtered940 < 1.0f) filtered940 = avg;
-  else filtered940 = RAW940_EMA_ALPHA * avg + (1.0f - RAW940_EMA_ALPHA) * filtered940;
+  if (!rtcHave940) {
+    filtered940 = avg;
+    rtcHave940 = true;
+  } else {
+    filtered940 = RAW940_EMA_ALPHA * avg + (1.0f - RAW940_EMA_ALPHA) * filtered940;
+  }
   raw940 = (int)avg;
   return filtered940;
 }
@@ -194,8 +193,12 @@ void updateMotion() {
   accelZ = event.acceleration.z;
   float mag = sqrtf(accelX*accelX + accelY*accelY + accelZ*accelZ);
   motionMagnitude = mag;
-  if (filteredMotion < 0.05f) filteredMotion = mag;
-  else filteredMotion = MOTION_EMA_ALPHA * mag + (1.0f - MOTION_EMA_ALPHA) * filteredMotion;
+  if (!rtcHaveMotion) {
+    filteredMotion = mag;
+    rtcHaveMotion = true;
+  } else {
+    filteredMotion = MOTION_EMA_ALPHA * mag + (1.0f - MOTION_EMA_ALPHA) * filteredMotion;
+  }
   prevIsMoving = isMoving;
   if (isMoving) {
     if (filteredMotion < (MOTION_THRESHOLD - MOTION_HYSTERESIS)) isMoving = false;
@@ -314,6 +317,7 @@ void goToDeepSleep() {
   clearLIS3DH_INT1();
   prepareForSleep();
   esp_sleep_enable_timer_wakeup(PERIODIC_WAKE_US);
+  static_assert(PIN_LIS3DH_INT <= 5, "ESP32-C3 deep-sleep wake requires GPIO0-5");
   esp_deep_sleep_enable_gpio_wakeup(BIT(PIN_LIS3DH_INT), ESP_GPIO_WAKEUP_GPIO_LOW);
   Serial.printf("Deep sleep... (boot #%u, quietSkip=%u)\n",
                 (unsigned)rtcBootCount, (unsigned)rtcQuietSkipCount);

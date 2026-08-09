@@ -109,6 +109,23 @@ armband-ppg-940nm/
 │   └── Armband_Full.ino           # Main firmware (with INT1 wake)
 ```
 
+## File index
+
+**Firmware**
+- [firmware/Armband_Full.ino](firmware/Armband_Full.ino) — **main firmware** (INT1 wake, 940 nm EMA, MQTT, deep sleep)
+- [firmware/MAX30102_Full_Monitor.ino](firmware/MAX30102_Full_Monitor.ino) — HR/SpO₂/temp + OLED bench sketch
+- [firmware/MAX30102_HeartRate_Temp_OLED.ino](firmware/MAX30102_HeartRate_Temp_OLED.ino) — earlier HR/temp sketch
+- [firmware/README.md](firmware/README.md)
+
+**Docs**
+- [PINOUT.md](PINOUT.md) — printable pinout + wire colour card
+- [SETUP.md](SETUP.md) — hardware, libraries, config, first run
+- [NOTES.md](NOTES.md) — development log and tuning notes
+
+**Build**
+- [platformio.ini](platformio.ini)
+- [LICENSE](LICENSE)
+
 ## Quick Start
 
 For a full walkthrough see **[SETUP.md](SETUP.md)**.

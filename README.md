@@ -123,6 +123,7 @@ armband-ppg-940nm/
 - [SETUP.md](SETUP.md) — hardware, libraries, config, first run
 
 **Scripts**
+- [scripts/generate_changelog.py](scripts/generate_changelog.py)
 - [scripts/update_file_index.py](scripts/update_file_index.py)
 
 **Build**

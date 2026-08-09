@@ -118,12 +118,17 @@ armband-ppg-940nm/
 - [firmware/README.md](firmware/README.md)
 
 **Docs**
+- [NOTES.md](NOTES.md) — development log and tuning notes
 - [PINOUT.md](PINOUT.md) — printable pinout + wire colour card
 - [SETUP.md](SETUP.md) — hardware, libraries, config, first run
-- [NOTES.md](NOTES.md) — development log and tuning notes
+
+**Scripts**
+- [scripts/update_file_index.py](scripts/update_file_index.py)
 
 **Build**
 - [platformio.ini](platformio.ini)
+
+**Config**
 - [LICENSE](LICENSE)
 
 ## Quick Start

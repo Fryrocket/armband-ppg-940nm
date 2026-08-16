@@ -19,6 +19,13 @@
  *  - maxOk/lisOk sensor gates; gpio hold on 940 nm emitter; suppress phantom GPIO-wake transition
  *  - RTC EMA seed flags (no magic thresholds); static_assert on wake GPIO range
  *
+ * Pin remap 2026-08-16 (Claude ASKs 114 / 126):
+ *   - GPIO2 (A0) left floating — it is a strapping pin
+ *   - BPW34 ADC moved A0 → D2 (GPIO4)
+ *   - LIS3DH INT1 moved D2 → D3 (GPIO5)  (still inside 0-5 for deep-sleep wake)
+ *   - TSAL6200 emitter moved D6 → D10 (GPIO10) + ~100 Ω series resistor
+ *     (avoids ROM bootloader UART0 TX pulses on the LED)
+ *
  * Edit the USER CONFIG section for your network, pins, and thresholds.
  */
 
@@ -46,10 +53,11 @@ const char* MQTT_PASSWORD = "your_mqtt_pass";
 const char* MQTT_CLIENT_ID = "armband_ppg";
 const char* MQTT_TOPIC    = "armband/ppg";
 
-#define PIN_940NM_EMITTER  D6
-#define PIN_940NM_ADC      A0
-#define PIN_BATTERY_ADC    A1
-#define PIN_LIS3DH_INT     D2
+// --- Pin defines (remapped 2026-08-16) ---
+#define PIN_940NM_EMITTER  D10   // was D6; + ~100 Ω series R required
+#define PIN_940NM_ADC      D2    // was A0; GPIO2 left floating (strapping)
+#define PIN_BATTERY_ADC    A1    // unchanged
+#define PIN_LIS3DH_INT     D3    // was D2; still GPIO0-5 for deep-sleep wake
 
 const float MOTION_THRESHOLD     = 11.5;
 const float MOTION_HYSTERESIS    = 0.8;

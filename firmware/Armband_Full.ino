@@ -11,6 +11,7 @@
  *  - Hardware INT1 motion wake (active-low, latched, high-pass)
  *  - 940nm reflectance channel with multi-sample averaging + EMA filter
  *  - Battery voltage monitoring (ADC + divider)
+ *  - BLE GATT notify to iPhone (same JSON as MQTT) — armband → phone sync
  *  - Full WiFi + MQTT (user/pass support)
  *  - Deep sleep with 3-minute timer + GPIO INT1 wake
  *  - RTC-persistent motion EMA + isMoving state (survives deep sleep)
@@ -42,6 +43,12 @@
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
+#include <ArduinoBLE.h>
+
+// Matches armband-ios ArmbandBLE.swift
+#define BLE_DEVICE_NAME "BGM-Armband"
+#define BLE_SERVICE_UUID        "C3A10000-8C3A-4B1E-9F2D-B6A0A1B2C3D4"
+#define BLE_JSON_CHAR_UUID      "C3A10001-8C3A-4B1E-9F2D-B6A0A1B2C3D4"
 
 // Local credentials: copy firmware/secrets.h.example → firmware/secrets.h (gitignored).
 #if __has_include("secrets.h")
@@ -140,6 +147,11 @@ float batteryVoltage = 0;
 
 unsigned long lastTempRead = 0;
 unsigned long lastMqttPublish = 0;
+unsigned long lastBlePublish = 0;
+
+BLEService bleService(BLE_SERVICE_UUID);
+BLECharacteristic bleJsonChar(BLE_JSON_CHAR_UUID, BLERead | BLENotify, 280);
+bool bleClientConnected = false;
 unsigned long lastDisplayUpdate = 0;
 unsigned long wakeStart = 0;
 bool motionEventThisWake = false;
@@ -262,20 +274,22 @@ void setupWiFi() {
   }
 }
 
-void reconnectMQTT() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (mqtt.connected()) return;
-  bool ok;
-  if (strlen(MQTT_USER) > 0) ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD);
-  else ok = mqtt.connect(MQTT_CLIENT_ID);
-  if (ok) Serial.println("MQTT connected");
-  else { Serial.print("MQTT fail rc="); Serial.println(mqtt.state()); }
+void setupBLE() {
+  if (!BLE.begin()) {
+    Serial.println("[BLE] begin FAILED");
+    return;
+  }
+  BLE.setLocalName(BLE_DEVICE_NAME);
+  BLE.setDeviceName(BLE_DEVICE_NAME);
+  BLE.setAdvertisedService(bleService);
+  bleService.addCharacteristic(bleJsonChar);
+  BLE.addService(bleService);
+  BLE.advertise();
+  Serial.println("[BLE] advertising as " BLE_DEVICE_NAME);
 }
 
-void publishData() {
-  if (!mqtt.connected()) return;
-  char payload[280];
-  snprintf(payload, sizeof(payload),
+void fillSensorPayload(char* payload, size_t n) {
+  snprintf(payload, n,
     "{\"bpm\":%d,\"spo2\":%d,\"temp\":%.1f,\"motion\":%.2f,\"moving\":%s,"
     "\"raw940\":%d,\"filt940\":%.1f,\"batt\":%.2f,"
     "\"trans\":\"%s\",\"conn_ms\":%lu,\"boot\":%u}",
@@ -287,7 +301,27 @@ void publishData() {
     raw940, filtered940, batteryVoltage,
     transitionStr, connectTimeMs, (unsigned)rtcBootCount
   );
-  mqtt.publish(MQTT_TOPIC, payload);
+}
+
+void notifyBLE(const char* payload) {
+  bleJsonChar.writeValue((const uint8_t*)payload, strlen(payload));
+}
+
+void reconnectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (mqtt.connected()) return;
+  bool ok;
+  if (strlen(MQTT_USER) > 0) ok = mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD);
+  else ok = mqtt.connect(MQTT_CLIENT_ID);
+  if (ok) Serial.println("MQTT connected");
+  else { Serial.print("MQTT fail rc="); Serial.println(mqtt.state()); }
+}
+
+void publishData() {
+  char payload[280];
+  fillSensorPayload(payload, sizeof(payload));
+  notifyBLE(payload);
+  if (mqtt.connected()) mqtt.publish(MQTT_TOPIC, payload);
   Serial.println(payload);
 }
 
@@ -418,6 +452,7 @@ void setup() {
   }
 
   clearLIS3DH_INT1();
+  setupBLE();
   batteryVoltage = readBatteryVoltage();
   if (lisOk) updateMotion();
   read940Filtered();
@@ -451,6 +486,15 @@ void setup() {
 }
 
 void loop() {
+  BLE.poll();
+  BLEDevice central = BLE.central();
+  bool nowConnected = central && central.connected();
+  if (nowConnected != bleClientConnected) {
+    bleClientConnected = nowConnected;
+    Serial.println(bleClientConnected ? "[BLE] phone connected" : "[BLE] phone disconnected");
+    if (!bleClientConnected) BLE.advertise();
+  }
+
   if (doNetworkThisWake) {
     if (!mqtt.connected()) reconnectMQTT();
     mqtt.loop();
@@ -514,6 +558,12 @@ void loop() {
   if (doNetworkThisWake && (millis() - lastMqttPublish > 1500)) {
     publishData();
     lastMqttPublish = millis();
+    lastBlePublish = millis();
+  } else if (millis() - lastBlePublish > 1500) {
+    char payload[280];
+    fillSensorPayload(payload, sizeof(payload));
+    notifyBLE(payload);
+    lastBlePublish = millis();
   }
 
   unsigned long awake = millis() - wakeStart;

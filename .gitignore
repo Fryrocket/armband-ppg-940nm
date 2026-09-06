@@ -1,0 +1,12 @@
+# Local Wi-Fi / MQTT credentials — never commit
+firmware/secrets.h
+secrets.h
+
+# Arduino / PlatformIO build junk
+.pio/
+.vscode/
+*.elf
+*.bin
+*.map
+build/
+.DS_Store

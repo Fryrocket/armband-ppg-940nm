@@ -112,7 +112,8 @@ armband-ppg-940nm/
 ## File index
 
 **Firmware**
-- [firmware/Armband_Full.ino](firmware/Armband_Full.ino) — **main firmware** (INT1 wake, 940 nm EMA, MQTT, deep sleep)
+- [firmware/Armband_Full.ino](firmware/Armband_Full.ino) — **main firmware** (INT1 wake, 940 nm EMA, MQTT, deep sleep, USB_BENCH_MODE)
+- [firmware/secrets.h.example](firmware/secrets.h.example) — Wi-Fi/MQTT template (copy to gitignored `secrets.h`)
 - [firmware/MAX30102_Full_Monitor.ino](firmware/MAX30102_Full_Monitor.ino) — HR/SpO₂/temp + OLED bench sketch
 - [firmware/MAX30102_HeartRate_Temp_OLED.ino](firmware/MAX30102_HeartRate_Temp_OLED.ino) — earlier HR/temp sketch
 - [firmware/README.md](firmware/README.md)
@@ -123,6 +124,7 @@ armband-ppg-940nm/
 - [SETUP.md](SETUP.md) — hardware, libraries, config, first run
 
 **Scripts**
+- [scripts/flash_xiao.sh](scripts/flash_xiao.sh) — Arduino-CLI flash to Seeed XIAO ESP32C3
 - [scripts/generate_changelog.py](scripts/generate_changelog.py)
 - [scripts/update_file_index.py](scripts/update_file_index.py)
 

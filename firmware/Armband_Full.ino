@@ -43,6 +43,10 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 
+// Local credentials: copy firmware/secrets.h.example → firmware/secrets.h (gitignored).
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
@@ -52,6 +56,7 @@ const char* MQTT_USER     = "armband";
 const char* MQTT_PASSWORD = "your_mqtt_pass";
 const char* MQTT_CLIENT_ID = "armband_ppg";
 const char* MQTT_TOPIC    = "armband/ppg";
+#endif
 
 // --- Pin defines (remapped 2026-08-16) ---
 #define PIN_940NM_EMITTER  D10   // was D6; + ~100 Ω series R required
@@ -79,6 +84,10 @@ const unsigned long QUIET_AWAKE_MS  = 5500;
 const unsigned long SETTLE_MS       = 120;
 
 const uint8_t QUIET_WAKE_SKIP = 2;
+
+// USB-Serial/JTAG drops off the host in deep sleep. Keep the XIAO awake
+// while plugged into USB so first-run Serial / I²C checks work.
+const bool USB_BENCH_MODE = true;
 
 MAX30105 particleSensor;
 Adafruit_LIS3DH lis = Adafruit_LIS3DH();
@@ -320,6 +329,15 @@ void prepareForSleep() {
 }
 
 void goToDeepSleep() {
+  if (USB_BENCH_MODE) {
+    static bool warned = false;
+    if (!warned) {
+      Serial.println("USB_BENCH_MODE: skip deep sleep (set false for production)");
+      warned = true;
+    }
+    wakeStart = millis();  // stay in loop() without spinning this path
+    return;
+  }
   rtcFilteredMotion = filteredMotion;
   rtcIsMoving       = isMoving;
   clearLIS3DH_INT1();

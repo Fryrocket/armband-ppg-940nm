@@ -90,7 +90,9 @@ If a sensor is missing from the list, fix the wiring or address before continuin
 
 A `platformio.ini` is already in the repo root.
 
-- **CLI**: from the project folder run `pio run -t upload` then `pio device monitor`
+- **CLI (this Mac)**: `./scripts/flash_xiao.sh` — Arduino-CLI, FQBN `esp32:esp32:XIAO_ESP32C3`. Copy `firmware/secrets.h.example` → `firmware/secrets.h` for Wi-Fi/MQTT (gitignored).
+- First-run firmware has `USB_BENCH_MODE = true` so USB CDC stays enumerated (ESP32-C3 drops USB in deep sleep). Set it `false` before wearing the band.
+- **CLI (PlatformIO)**: from the project folder run `pio run -t upload` then `pio device monitor`
 - **GUI**: open the folder in VS Code with the PlatformIO extension installed – it will use the same `platformio.ini` and pull the libraries automatically.
 
 PlatformIO’s `espressif32` platform pins a current enough core for the C3 GPIO wake path in normal installs; if motion wake fails after a clean flash, update the platform.

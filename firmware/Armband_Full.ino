@@ -43,7 +43,10 @@
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
-#include <ArduinoBLE.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
 // Matches armband-ios ArmbandBLE.swift
 #define BLE_DEVICE_NAME "BGM-Armband"
@@ -149,9 +152,21 @@ unsigned long lastTempRead = 0;
 unsigned long lastMqttPublish = 0;
 unsigned long lastBlePublish = 0;
 
-BLEService bleService(BLE_SERVICE_UUID);
-BLECharacteristic bleJsonChar(BLE_JSON_CHAR_UUID, BLERead | BLENotify, 280);
+BLEServer* bleServer = nullptr;
+BLECharacteristic* bleJsonChar = nullptr;
 bool bleClientConnected = false;
+
+class BleServerCB : public BLEServerCallbacks {
+  void onConnect(BLEServer*) override {
+    bleClientConnected = true;
+    Serial.println("[BLE] phone connected");
+  }
+  void onDisconnect(BLEServer*) override {
+    bleClientConnected = false;
+    Serial.println("[BLE] phone disconnected — advertising");
+    BLEDevice::startAdvertising();
+  }
+};
 unsigned long lastDisplayUpdate = 0;
 unsigned long wakeStart = 0;
 bool motionEventThisWake = false;
@@ -275,16 +290,20 @@ void setupWiFi() {
 }
 
 void setupBLE() {
-  if (!BLE.begin()) {
-    Serial.println("[BLE] begin FAILED");
-    return;
-  }
-  BLE.setLocalName(BLE_DEVICE_NAME);
-  BLE.setDeviceName(BLE_DEVICE_NAME);
-  BLE.setAdvertisedService(bleService);
-  bleService.addCharacteristic(bleJsonChar);
-  BLE.addService(bleService);
-  BLE.advertise();
+  BLEDevice::init(BLE_DEVICE_NAME);
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BleServerCB());
+  BLEService* svc = bleServer->createService(BLE_SERVICE_UUID);
+  bleJsonChar = svc->createCharacteristic(
+    BLE_JSON_CHAR_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  bleJsonChar->addDescriptor(new BLE2902());
+  svc->start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SERVICE_UUID);
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
   Serial.println("[BLE] advertising as " BLE_DEVICE_NAME);
 }
 
@@ -304,7 +323,9 @@ void fillSensorPayload(char* payload, size_t n) {
 }
 
 void notifyBLE(const char* payload) {
-  bleJsonChar.writeValue((const uint8_t*)payload, strlen(payload));
+  if (!bleJsonChar) return;
+  bleJsonChar->setValue((uint8_t*)payload, strlen(payload));
+  if (bleClientConnected) bleJsonChar->notify();
 }
 
 void reconnectMQTT() {
@@ -486,15 +507,6 @@ void setup() {
 }
 
 void loop() {
-  BLE.poll();
-  BLEDevice central = BLE.central();
-  bool nowConnected = central && central.connected();
-  if (nowConnected != bleClientConnected) {
-    bleClientConnected = nowConnected;
-    Serial.println(bleClientConnected ? "[BLE] phone connected" : "[BLE] phone disconnected");
-    if (!bleClientConnected) BLE.advertise();
-  }
-
   if (doNetworkThisWake) {
     if (!mqtt.connected()) reconnectMQTT();
     mqtt.loop();

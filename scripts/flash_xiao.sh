@@ -49,9 +49,10 @@ else
   echo "No firmware/secrets.h — WiFi/MQTT stay placeholders. Copy secrets.h.example to secrets.h."
 fi
 
+ESPBLE="${HOME}/Library/Arduino15/packages/esp32/hardware/esp32/3.3.11/libraries/BLE"
 echo "FQBN=$FQBN"
 echo "PORT=$PORT"
-arduino-cli compile --fqbn "$FQBN" "$SKETCH"
+arduino-cli compile --fqbn "$FQBN" --library "$ESPBLE" "$SKETCH"
 arduino-cli upload -p "$PORT" --fqbn "$FQBN" "$SKETCH"
 echo "Flash OK. Serial at 115200:"
 echo "  arduino-cli monitor -p $PORT -c baudrate=115200"
